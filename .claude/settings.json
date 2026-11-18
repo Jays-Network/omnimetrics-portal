@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(/opt/jaysnet/**)",
+      "Edit(/opt/jaysnet/**)",
+      "Read(/etc/**)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Bash(sudo:*)",
+      "Bash(rm -rf:*)",
+      "Bash(psql:*)"
+    ]
+  }
+}
