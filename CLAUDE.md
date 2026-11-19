@@ -26,8 +26,6 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 - Datasets expose plain-language field labels and an allowlist of columns; sensitive fields can be hidden per role.
 - Dashboard queries run as grafana_reader with a statement_timeout and row limit.
 
-## Roadmap decisions (panel builder)
-- Panels are defined as typed JSON specs (dataset, filters, groupBy, measure, chart type) in packages/types and rendered generically. A visual block builder (Blockly) will later produce these specs. Never accept raw SQL from the browser.
-- Roles are admin | builder | viewer. Builders and viewers only ever see data for their own allowed_projects, enforced server-side on every query.
-- Datasets expose plain-language field labels and an allowlist of columns; sensitive fields can be hidden per role.
-- Dashboard queries run as grafana_reader with a statement_timeout and row limit.
+## Design rules
+- Any design skill must respect the brand CSS variables, the shadcn/ui + Tremor component stack, and the white-label theming in the brief.
+- This is an operations dashboard: favour dense, legible, consistent data presentation over decorative layouts or heavy animation. Motion is a Phase 5 concern.
