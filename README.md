@@ -41,7 +41,7 @@ pnpm install
 pnpm --filter web dev        # http://<host>:3002 , bound to 0.0.0.0
 ```
 
-`pnpm --filter web build && pnpm --filter web start` serves on 3002 too, but in production mode the auth cookie is
+`pnpm --filter web build && pnpm --filter web start` serves on 3002 too, bound to 127.0.0.1 (Nginx fronts it), but in production mode the auth cookie is
 `Secure`, so browsers will not keep it over plain `http://`. Use `dev` for LAN testing; production runs behind
 Nginx with TLS.
 
@@ -53,3 +53,9 @@ Nginx with TLS.
 4. `http://<host>:3002/api/auth/me` returns your user JSON.
 5. Click **Sign out**; you are sent to `/login`. Visiting `/dashboard` again redirects to `/login`.
 6. Wrong password 5 times for the same user and IP returns `429`. Check `SELECT action, detail FROM app_audit_log ORDER BY id DESC LIMIT 10;`.
+
+## Reverse proxy note
+
+`start` binds 127.0.0.1 only. Nginx must overwrite `X-Forwarded-For` and `X-Real-IP` (not append), because
+`lib/rate-limit.ts` trusts them. Behind Cloudflare or a tunnel, `$remote_addr` is Cloudflare's address, so set both
+headers from `CF-Connecting-IP` instead. See the Nginx section of `docs/OmniMetrics_Portal_Architecture.md`.

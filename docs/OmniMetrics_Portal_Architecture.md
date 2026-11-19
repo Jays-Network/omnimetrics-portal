@@ -435,7 +435,9 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3002;
         proxy_set_header Host $host;
+        # OVERWRITE (never append to) the client-IP headers: lib/rate-limit.ts trusts them.
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
@@ -445,6 +447,13 @@ server {
     return 301 https://$host$request_uri;
 }
 ```
+
+**Client-IP headers.** `next start` binds 127.0.0.1, so only Nginx can reach it. Nginx must overwrite
+`X-Forwarded-For` and `X-Real-IP` with values it determined itself (never `$proxy_add_x_forwarded_for`), because
+`lib/rate-limit.ts` trusts them; a client-supplied value would let an attacker dodge the login rate limit. When traffic
+arrives via Cloudflare or a tunnel, `$remote_addr` is Cloudflare's address, so set both headers from
+`CF-Connecting-IP` instead (`proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`), and only accept that header
+from Cloudflare's IP ranges.
 
 ### `.env.local`
 ```env
