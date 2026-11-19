@@ -61,6 +61,17 @@ Other standing statements by Jay in past chats:
 
 **Devices:** `device_number` must match `^[0-9]+$` and not equal `'0'`.
 
+### worldrisk_tracking schema (supplied by Jay, 2026-11-20)
+
+- Keys and text: `id` uuid (PK); `row_id`, `sheet_id`, `sheet_name`, `workspace_name`, `folder_name`, `transporter`, `reg_number`, `device_number`, `internal_ref`, `loading_location`, `offloading_location`, `current_location`, `status`, `escort_name` are text.
+- Escorts (text): `escort_drc`, `escort_mal`, `escort_moz`, `escort_nam`, `escort_tan`, `escort_zam`, `escort_zim`, `escort_bots`.
+- Coordinates (double precision): `loading_lat`, `loading_lon`, `offloading_lat`, `offloading_lon`.
+- Dates (type `date`): `booking_date`, `dispatch_date`, `intransit_date`, `intransit_began_date`, `drc_dispatch_date`, `zam_dispatch_date`, `nam_dispatch_date`, `tan_dispatch_date`, `zim_dispatch_date`, `bots_dispatch_date`, `moz_dispatch_date`, `sa_dispatch_date`. Because every one is `date`, both `best_date` forms compile; port the `NULLIF(TRIM(x::text),'')` casts as coded.
+- Timestamps: `system_created_at` and `row_modified_at` are `timestamp WITHOUT time zone`. The stored zone is not yet confirmed.
+- `raw_data` jsonb.
+- **No `client_name` and no country column.** Both are derived at query time (client from `raw_data` keys `Client`/`CLIENT`/`client`; country from location keyword lists).
+- Indexes: only `worldrisk_tracking_pkey (id)` and `worldrisk_tracking_row_sheet_unique UNIQUE (row_id, sheet_id)`. Nothing on `folder_name` or any date, so "folder_name first" is a logical discipline, not an index guarantee; expect sequential scans and keep the 10s statement timeout in mind.
+
 ## 3. SQL conventions that recur
 
 1. `folder_name` first, before any `CASE` or `LATERAL`.
@@ -68,7 +79,7 @@ Other standing statements by Jay in past chats:
 3. Master Alerts triggers (WorldRisk Audit): T1 no update, T2 border check failed/overdue (from JSON in `raw_data`), T3 overdue forecast, T4 multi-trip/duplicate. `NULL::integer` padding keeps UNION ALL columns aligned. [architecture brief]
 4. Border check failed: logic lives in the Audit JSON. Copy it from there, do not rewrite it from memory.
 5. A dispatch is `COUNT(DISTINCT UPPER(REPLACE(reg_number,' ','')) || best_date)`.
-6. `best_date` differs by dashboard (section 6, item 5). Port per dashboard. Do not unify.
+6. `best_date` differs by dashboard and, on Tracking Sheets, by panel (section 6, item 5). Port per panel. Do not unify.
 7. Duplicate entry: keep the latest row per (clean_reg, best_date) by `row_modified_at`, then group by invoicing period `(date_trunc('month', best_date - interval '24 days') + interval '24 days')::date`; a duplicate is a group with more than one row. The table returns every occurrence.
 8. Duplicate exclusions seen in chats (sheet_name): Invoice/invoicing, GDG, Trafalgar, Suleman Roadway Logistics, SRL Tracking Sheet, Bridge Cross Border invoicing Sheet, JHB Local, DBN Local, DBN-PE; client_name: Reload Aquarius Shipping, RELOAD ZLT; and the `Moxico Mine- Zambia` label. Other exclusions may exist in the Audit JSON; copy from there.
 9. Tracking Sheets billing month runs from the last Friday to the last Thursday of the month (custom `CASE` on `best_date`).
@@ -107,11 +118,16 @@ So these rows are not mis-bucketed by folder: the folder is right and Grafana's 
 
 Port faithfully, record in a comment, do not fix without Jay's ruling.
 
-1. The Tracking Sheets `projects` dropdown shows mapped labels, but its panels filter `folder_name IN ($projects)` on the raw column. Selecting a label with no matching folder name (for example Moxico Mine- Zambia) returns nothing; "All" expands to the label list.
+1. The Tracking Sheets `projects` dropdown shows mapped labels, but its panels filter `folder_name IN ($projects)` on the raw column. Selecting a label with no matching folder name (for example Moxico Mine- Zambia) returns nothing. "All" probably expands to the label list (the variable has `includeAll` and no `allValue`, so the `'All' IN ($projects)` bypass in some panels likely never fires). To be confirmed side by side at :3000. Note that not every panel filters on the raw column: Daily and Weekly filter on a client-derived `mapped_project_name`, Monthly and Dispatched on a Moxico CASE plus a "Cross border Archives" client branch.
 2. `test sheets` is excluded in the Audit project list but not in the Tracking Sheets or Devices lists. R1 supersedes.
 3. Audit Alerts Table: the `active_trucks` CTE lacks the `workspace_name != 'WorldRisk Contractors'` and `folder_name NOT ILIKE '%ZZZ Archive%'` filters that the gauges have, so table and gauge counts can differ.
 4. Grand Total (Tracking Sheets) comments say "Last 90 Days" but the code uses `CURRENT_DATE - INTERVAL '60 day'`. Resolved by Jay: the code wins (R4).
-5. `best_date`: Tracking Sheets uses `COALESCE(intransit_began_date, drc_dispatch_date, ..., dispatch_date, intransit_date, booking_date)`, the first non-null in priority order. Audit and Project Dispatch use `COALESCE(LEAST(NULLIF(TRIM(x::text),'')::date ...), booking_date)`, the earliest date. Check every panel before assuming which one applies.
+5. `best_date` is not one rule, even inside Tracking Sheets (checked per panel in the JSON):
+   - **Monthly (panel 1) and Grand Total of Dispatched (panel 9):** first non-null `COALESCE(intransit_began_date, drc_dispatch_date, zam_dispatch_date, nam_dispatch_date, tan_dispatch_date, zim_dispatch_date, bots_dispatch_date, moz_dispatch_date, sa_dispatch_date, dispatch_date, intransit_date, booking_date)`.
+   - **Daily (panel 11) and Weekly (panel 12):** earliest-date two-tier: `COALESCE((SELECT min(d::date) FROM (VALUES (NULLIF(TRIM(col::text),'')), ...) AS dates(d) WHERE d IS NOT NULL AND d::text != '' AND d::date > '2010-01-01'), NULLIF(TRIM(booking_date::text),'')::date)` over the same 11 columns (no `booking_date` in the list; it is the fallback).
+   - **Escorts, Active Tracks, Grand Total, Heatmap:** plain `booking_date`, no `best_date`.
+   - Audit and Project Dispatch use `COALESCE(LEAST(NULLIF(TRIM(x::text),'')::date ...), booking_date)`, the earliest date.
+   Consequence: Monthly, Weekly and Daily totals need not reconcile. Check every panel before assuming which one applies.
 6. Devices: the gauge override names (for example "Active Devices (This Month)") do not match the query column names.
 7. Date casts use `NULLIF(TRIM(x::text),'')::date`, which can throw on bad data. Keep the cast-safe form.
 8. The Grafana datasource UID changed from `P2B13F441ACD56E0F` (old) to `bfilk2co86gaoc` (current).

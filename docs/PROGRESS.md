@@ -35,6 +35,10 @@ pnpm --filter web build && pnpm --filter web start   # 127.0.0.1:3002, Secure co
 ```
 Env vars live in `apps/web/.env.local` (see `.env.local.example`); never commit it.
 
-## Next: Phase 2
-Confirm scope with Jay before starting. Start by reading the relevant sections of
-`docs/OmniMetrics_Portal_Architecture.md` (grep headings; do not read it whole).
+## Phase 2 (in progress): WorldRisk Tracking Sheets, admin-only
+Plan and Jay's answers: `docs/PLAN_PHASE2.md` (approved 2026-11-20). Domain rulings: `docs/CONTEXT.md`.
+- Step 2 DONE: `apps/web/lib/queries/filters.ts` (`FiltersSchema`, `resolveFilters`, `FilterError`, `filtersFromSearchParams`),
+  `packages/types/worldrisk.ts`, `apps/web/tests/filters.test.ts` (typecheck + 31 tests green).
+- Decisions to carry: scope on raw `folder_name`; `test sheets` stripped for every role; "All" = explicit folder list, never no-filter;
+  non-admin grants are not narrowed by the dropdown universe, only by R1; default range now-6h, picker in Africa/Johannesburg.
+- Next: Step 3 (shared base query, summary route, `004_portal_reader_role.sql.example`). Wait for Jay's "approved".
