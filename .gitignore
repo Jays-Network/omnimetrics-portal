@@ -8,3 +8,5 @@ node_modules/
 *.tsbuildinfo
 db/migrations/002_seed_admin.sql
 db/migrations/003_portal_app_role.sql
+__pycache__/
+*.pyc
