@@ -29,3 +29,10 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 ## Design rules
 - Any design skill must respect the brand CSS variables, the shadcn/ui + Tremor component stack, and the white-label theming in the brief.
 - This is an operations dashboard: favour dense, legible, consistent data presentation over decorative layouts or heavy animation. Motion is a Phase 5 concern.
+
+## Token hygiene
+- Read docs/OmniMetrics_Portal_Architecture.md by section (grep headings, then read the relevant range), never whole.
+- Keep command output quiet (`-q`, `--silent`, redirect or `| tail`); only surface failures.
+- Don't echo back files you write; state the path and a one-line summary.
+- `/clear` between phases; docs/PROGRESS.md is the handoff (update it at the end of each phase, read it at the start of the next).
+- Keep plugins to a minimum.
