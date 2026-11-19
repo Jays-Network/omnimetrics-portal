@@ -38,3 +38,6 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 - Don't echo back files you write; state the path and a one-line summary.
 - `/clear` between phases; docs/PROGRESS.md is the handoff (update it at the end of each phase, read it at the start of the next).
 - Keep plugins to a minimum.
+
+## Domain context (binding)
+Read docs/CONTEXT.md before writing any SQL, project scoping or dashboard code. Its rulings (R1 to R5) are binding. If anything conflicts with it, stop and ask; do not choose silently.
