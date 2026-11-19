@@ -2,10 +2,11 @@
 Custom white-label replacement for Grafana OSS. Read-only visualization layer for Jay's Network fleet tracking.
 
 ## Stack
-Turborepo monorepo (pnpm). apps/web = Next.js 15 App Router + API routes (single process, port 3001). apps/mobile = future Expo placeholder.
+Turborepo monorepo (pnpm). apps/web = Next.js 15 App Router + API routes (single process, port 3002). apps/mobile = future Expo placeholder.
 React 19, TypeScript, `postgres` client with raw SQL (no ORM), jose JWT + bcryptjs, HTTP-only cookie `omnimetrics_token`, shadcn/ui + Tailwind v4, Tremor, Nivo, TanStack Table/Query, Zustand, react-map-gl + MapLibre, Zod.
 
 ## Environment
+Portal port is 3002. Port 3001 belongs to OmniOrchestrator and stays separate; never touch it.
 Ubuntu 24.04 LXC, PostgreSQL 18 on localhost:5432, DB `jaysnet_data`. Dashboards read via `grafana_reader`; only app_* tables write via `jaysnet_admin`. Grafana stays on :3000 until parity. Node 22 + pnpm via fnm for user `omni`.
 
 ## Hard rules

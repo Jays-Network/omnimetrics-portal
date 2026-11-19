@@ -30,14 +30,14 @@ visualization layer for the OmniMetrics logistics/fleet tracking platform operat
 
 | Item | Detail |
 |---|---|
-| Host | OmniMetrics LXC — Ubuntu 24.04, 4 vCores, 200GB disk, 2GB swap |
+| Host | OmniMetrics LXC — Ubuntu 24.04, 5 cores, 10GB RAM, 200GB disk, 8GB swap |
 | Proxmox node | Cisco M5 ("WR") |
 | LXC IP | `192.168.3.32` |
 | DDNS | `omnimetrics.dns.jays-network.com` |
 | Remote access | Twingate |
 | PostgreSQL | Port 5432, DB: `jaysnet_data`, users: `jaysnet_admin`, `grafana_reader` |
 | Grafana (existing) | Port 3000 — stays running during transition, decommission in Phase 5 |
-| Portal (new) | Port 3001 — Next.js serves both frontend AND API routes |
+| Portal (new) | Port 3002 — Next.js serves both frontend AND API routes. Port 3001 is OmniOrchestrator and stays separate |
 
 ---
 
@@ -51,7 +51,7 @@ Everything runs inside one Next.js process. No separate backend service.
     │
 [Nginx :443]  ← SSL termination
     │
-[Next.js :3001]  ← App Router pages + /api/* route handlers
+[Next.js :3002]  ← App Router pages + /api/* route handlers
     │
 [PostgreSQL :5432 — jaysnet_data]
     ├── jaysnet_admin   → app_users writes + dashboard reads
@@ -417,7 +417,7 @@ User=www-data
 WorkingDirectory=/opt/omnimetrics-portal/apps/web
 ExecStart=/usr/bin/node .next/standalone/server.js
 Restart=always
-Environment=PORT=3001
+Environment=PORT=3002
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/omnimetrics-portal/apps/web/.env.local
 
@@ -433,7 +433,7 @@ server {
     ssl_certificate     /etc/ssl/omnimetrics/cert.pem;
     ssl_certificate_key /etc/ssl/omnimetrics/key.pem;
     location / {
-        proxy_pass http://127.0.0.1:3001;
+        proxy_pass http://127.0.0.1:3002;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;

@@ -1,7 +1,9 @@
 # OmniMetrics Portal
 
 White-label, read-only visualization layer for Jay's Network fleet tracking. Turborepo + pnpm monorepo:
-`apps/web` (Next.js 15, port 3001), `packages/types`, `packages/tsconfig`, `apps/mobile` (placeholder).
+`apps/web` (Next.js 15, port 3002), `packages/types`, `packages/tsconfig`, `apps/mobile` (placeholder).
+
+Port 3001 is OmniOrchestrator and stays separate; the portal uses 3002.
 
 See `CLAUDE.md` and `docs/OmniMetrics_Portal_Architecture.md`.
 
@@ -36,18 +38,18 @@ Run from the repo root as user `omni` (Node 22, pnpm 12).
 
 ```bash
 pnpm install
-pnpm --filter web dev        # http://<host>:3001 , bound to 0.0.0.0
+pnpm --filter web dev        # http://<host>:3002 , bound to 0.0.0.0
 ```
 
-`pnpm --filter web build && pnpm --filter web start` serves on 3001 too, but in production mode the auth cookie is
+`pnpm --filter web build && pnpm --filter web start` serves on 3002 too, but in production mode the auth cookie is
 `Secure`, so browsers will not keep it over plain `http://`. Use `dev` for LAN testing; production runs behind
 Nginx with TLS.
 
 ## Phase 1 verify checklist
 
-1. No cookie: `curl -si http://localhost:3001/dashboard | head -3` returns `307` with `location: /login?next=%2Fdashboard`.
-2. Open `http://<host>:3001/login`, sign in as the admin; the browser lands on `/dashboard` showing your username and role.
+1. No cookie: `curl -si http://localhost:3002/dashboard | head -3` returns `307` with `location: /login?next=%2Fdashboard`.
+2. Open `http://<host>:3002/login`, sign in as the admin; the browser lands on `/dashboard` showing your username and role.
 3. DevTools, Application, Cookies: `omnimetrics_token` is `HttpOnly`, `SameSite=Strict`, with a 24h expiry.
-4. `http://<host>:3001/api/auth/me` returns your user JSON.
+4. `http://<host>:3002/api/auth/me` returns your user JSON.
 5. Click **Sign out**; you are sent to `/login`. Visiting `/dashboard` again redirects to `/login`.
 6. Wrong password 5 times for the same user and IP returns `429`. Check `SELECT action, detail FROM app_audit_log ORDER BY id DESC LIMIT 10;`.
