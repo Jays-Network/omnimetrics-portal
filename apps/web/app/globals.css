@@ -1,0 +1,39 @@
+@import 'tailwindcss';
+
+/* White-label brand tokens. Rebrand = change these 8 variables + swap the logo. */
+:root {
+  --brand-primary: #0f172a; /* Main background / nav */
+  --brand-accent: #3b82f6; /* CTAs, active states, chart highlights */
+  --brand-accent-fg: #ffffff; /* Text on accent colour */
+  --brand-surface: #1e293b; /* Card / panel background */
+  --brand-border: #334155; /* Borders and dividers */
+  --brand-text: #f1f5f9; /* Primary text */
+  --brand-text-muted: #94a3b8; /* Secondary / label text */
+  --brand-danger: #ef4444; /* Alert / overdue indicators */
+}
+
+@theme inline {
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-accent-fg: var(--brand-accent-fg);
+  --color-brand-surface: var(--brand-surface);
+  --color-brand-border: var(--brand-border);
+  --color-brand-text: var(--brand-text);
+  --color-brand-text-muted: var(--brand-text-muted);
+  --color-brand-danger: var(--brand-danger);
+
+  --font-display: var(--font-syne), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background: var(--brand-primary);
+  color: var(--brand-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
