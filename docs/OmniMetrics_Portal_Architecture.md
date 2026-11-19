@@ -35,7 +35,7 @@ visualization layer for the OmniMetrics logistics/fleet tracking platform operat
 | LXC IP | `192.168.3.32` |
 | DDNS | `omnimetrics.dns.jays-network.com` |
 | Remote access | Twingate |
-| PostgreSQL | Port 5432, DB: `jaysnet_data`, users: `jaysnet_admin`, `grafana_reader` |
+| PostgreSQL | Port 5432, DB: `jaysnet_data`, users: `jaysnet_admin`, `grafana_reader` (Grafana only), `portal_reader` (portal dashboards, new) |
 | Grafana (existing) | Port 3000 — stays running during transition, decommission in Phase 5 |
 | Portal (new) | Port 3002 — Next.js serves both frontend AND API routes. Port 3001 is OmniOrchestrator and stays separate |
 
@@ -55,7 +55,7 @@ Everything runs inside one Next.js process. No separate backend service.
     │
 [PostgreSQL :5432 — jaysnet_data]
     ├── jaysnet_admin   → app_users writes + dashboard reads
-    └── grafana_reader  → dashboard reads (read-only, existing user)
+    └── portal_reader   → dashboard reads (read-only, dedicated role; grafana_reader stays for Grafana)
 ```
 
 ### Package Selections
@@ -94,13 +94,11 @@ Everything runs inside one Next.js process. No separate backend service.
 #### Charts & Data Visualization
 | Package | Purpose |
 |---|---|
-| `tremor` | **Primary dashboard charts** — AreaChart, BarChart, DonutChart, SparklineChart, KPI cards. Built on Recharts + Radix UI. Beautiful zero-config defaults, matches shadcn theming perfectly. Handles 90% of OmniMetrics panels. |
-| `@nivo/bar`, `@nivo/heatmap`, `@nivo/geo` | **Complex visualizations** — FQM destination heatmap, any Tremor gaps. Canvas rendering handles large row counts without SVG degradation. |
-| `recharts` | Direct use for any shadcn chart components that extend beyond Tremor |
+| `recharts` via shadcn `chart` component | **Primary dashboard charts** — AreaChart, BarChart, PieChart (donut), sparklines. Themed through the brand `--chart-1..n` CSS variables. StatCard is a shadcn Card. |
+| `@nivo/bar`, `@nivo/heatmap`, `@nivo/geo` | **Complex visualizations** (Phase 3) — FQM destination heatmap and any gaps. Canvas rendering handles large row counts without SVG degradation. |
 
-> **Why this combination:** Tremor covers stat cards, trend areas, donuts, and bar lists with
-> beautiful SaaS-grade defaults out of the box. Nivo handles the FQM heatmap and any geospatial
-> panels with its Canvas rendering path — important at 150k+ rows.
+> **Why not Tremor:** `@tremor/react` 3.18.7 supports only React 18 / Tailwind 3; this stack is React 19 / Tailwind v4.
+> shadcn charts (Recharts) match the existing shadcn theming and brand variables with no version conflict.
 
 #### Tables
 | Package | Purpose |
@@ -219,12 +217,12 @@ apps/web/
 │
 ├── components/
 │   ├── charts/
-│   │   ├── StatusDonut.tsx           ← Tremor DonutChart
-│   │   ├── TrendArea.tsx             ← Tremor AreaChart
-│   │   ├── StatCard.tsx              ← Tremor + shadcn Card KPI tile
+│   │   ├── StatusDonut.tsx           ← shadcn chart (Recharts PieChart)
+│   │   ├── TrendArea.tsx             ← shadcn chart (Recharts AreaChart)
+│   │   ├── StatCard.tsx              ← shadcn Card KPI tile
 │   │   ├── AlertsTable.tsx           ← TanStack Table (Master Alerts ID:4)
 │   │   ├── TrackingTable.tsx         ← TanStack Table (full tracking + pagination)
-│   │   ├── TransporterBar.tsx        ← Tremor BarChart (FQM)
+│   │   ├── TransporterBar.tsx        ← shadcn chart (Recharts BarChart, FQM)
 │   │   ├── DestinationHeatmap.tsx    ← Nivo HeatMap (FQM)
 │   │   └── GeoMap.tsx                ← react-map-gl + MapLibre
 │   │
@@ -269,7 +267,7 @@ apps/web/
 │
 ├── middleware.ts                     ← Unauthenticated → /login
 ├── next.config.ts                    ← output: 'standalone' for production build
-├── tailwind.config.ts                ← Brand tokens + Tremor + shadcn theme merge
+├── tailwind.config.ts                ← Brand tokens + shadcn theme merge
 ├── tsconfig.json
 └── .env.local
 ```
@@ -458,7 +456,7 @@ from Cloudflare's IP ranges.
 ### `.env.local`
 ```env
 DATABASE_URL=postgresql://jaysnet_admin:PASSWORD@localhost:5432/jaysnet_data
-DATABASE_URL_READONLY=postgresql://grafana_reader:PASSWORD@localhost:5432/jaysnet_data
+DATABASE_URL_READONLY=postgresql://portal_reader:PASSWORD@localhost:5432/jaysnet_data
 JWT_SECRET=<openssl rand -hex 32>
 JWT_EXPIRE_HOURS=24
 NEXT_PUBLIC_BRAND_NAME=OmniMetrics
@@ -629,7 +627,7 @@ components/layout/CarouselController.tsx  ← Dashboard rotation with Motion tra
 ### Phase 2 — First Dashboard (Worldrisk Tracking)
 - [ ] Port Worldrisk SQL into `lib/queries/worldrisk.ts`
 - [ ] `/api/dashboard/worldrisk/*` routes wired
-- [ ] `StatCard`, `StatusDonut`, `TrendArea` components (Tremor) — with built-in stale/refresh state
+- [ ] `StatCard`, `StatusDonut`, `TrendArea` components (shadcn charts / Recharts) — with built-in stale/refresh state
 - [ ] `Sidebar`, `Topbar`, `FilterBar` layout components
 - [ ] `RefreshIntervalSelector` in Topbar — Off / 5s / 10s / 30s / 1m / 5m / 15m
 - [ ] TanStack Query hooks reading `refreshInterval` from Zustand store
@@ -639,7 +637,7 @@ components/layout/CarouselController.tsx  ← Dashboard rotation with Motion tra
 ### Phase 3 — Remaining Dashboards
 - [ ] ADARS (ID:2), Devices (ID:3), Tracking Table (ID:5)
 - [ ] Audit/Alerts (ID:4) — Master Alerts UNION ALL + `AlertsTable`
-- [ ] FQM — `TransporterBar` (Tremor) + `DestinationHeatmap` (Nivo)
+- [ ] FQM — `TransporterBar` (shadcn charts) + `DestinationHeatmap` (Nivo)
 
 ### Phase 4 — Admin & User Management
 - [ ] User list, create, edit, deactivate

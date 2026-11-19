@@ -23,7 +23,7 @@ Read this first after `/clear`. Update it at the end of every phase.
   components). `middleware.ts` is only a redirect convenience: it is edge-only, verifies the JWT signature and expiry, and
   cannot query the DB. Never rely on it for authorization.
 - **portal_app least privilege.** `DATABASE_URL` (`getDb()`) is the `portal_app` role, app_* tables only.
-  `DATABASE_URL_READONLY` (`getReadonlyDb()`) is `grafana_reader` with a 10s statement_timeout for tracking reads.
+  `DATABASE_URL_READONLY` (`getReadonlyDb()`) is `portal_reader` (migration 004, applied by Jay; until then the URL may still point at `grafana_reader`) with a 10s statement_timeout for tracking reads.
 - **Manual DB steps already completed:** app tables created, `portal_app` role created and granted, first admin user created.
 
 ## How to run

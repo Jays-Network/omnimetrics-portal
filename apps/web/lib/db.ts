@@ -7,7 +7,7 @@ type Sql = ReturnType<typeof postgres>
  * hot reloads do not leak connection pools.
  *
  *  - getDb()         DATABASE_URL           portal_app role: app_* tables only (auth, users, audit log)
- *  - getReadonlyDb() DATABASE_URL_READONLY  grafana_reader: tracking-data reads, 10s statement_timeout
+ *  - getReadonlyDb() DATABASE_URL_READONLY  portal_reader: tracking-data reads, 10s statement_timeout
  *
  * Clients are created on first use, so `next build` does not need a database.
  * All queries MUST use tagged-template parameters (sql`... ${value}`); never
