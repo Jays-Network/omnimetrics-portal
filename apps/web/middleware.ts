@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { AUTH_COOKIE_NAME, verifyToken } from '@/lib/jwt'
 
 /**
+ * Redirect convenience ONLY, not the security boundary. Every protected page
+ * and API route must call requireAuth() / getCurrentUser() itself.
  * Route guard: unauthenticated requests for /dashboard/* and /admin/* go to
  * /login. This verifies the JWT signature and expiry (not just that the cookie
  * exists). It runs on the edge, so it cannot check app_users.is_active;

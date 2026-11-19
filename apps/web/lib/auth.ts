@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers'
 import type { NextRequest, NextResponse } from 'next/server'
-import type { JWTPayload } from '@omnimetrics/types'
+import { ROLES, type Role, type User } from '@omnimetrics/types'
 import { getDb } from '@/lib/db'
 import {
   AUTH_COOKIE_NAME,
@@ -14,8 +14,8 @@ import {
 export { AUTH_COOKIE_NAME, getTokenLifetimeSeconds, signToken, verifyToken }
 export type { TokenClaims }
 
-const ACTIVE_CACHE_TTL_MS = 60_000
-const ACTIVE_CACHE_MAX_ENTRIES = 1_000
+const USER_CACHE_TTL_MS = 60_000
+const USER_CACHE_MAX_ENTRIES = 1_000
 
 // ---------------------------------------------------------------------------
 // Cookie helpers
@@ -75,68 +75,103 @@ export function authErrorResponse(error: unknown): Response {
   throw error
 }
 
-// is_active cache: userId -> { active, expiresAt }. Per-process, ~60s TTL, so a
-// deactivated user loses access within a minute.
+// Permission cache: userId -> { user | null, expiresAt }. Per-process, 60s TTL.
+// A role / project / is_active change therefore takes up to 60s to apply in
+// other processes; call invalidateUserCache(userId) after such changes so this
+// process reflects them immediately. null = missing or inactive user.
 const globalForAuth = globalThis as unknown as {
-  __omniActiveCache?: Map<string, { active: boolean; expiresAt: number }>
+  __omniUserCache?: Map<string, { user: User | null; expiresAt: number }>
 }
-const activeCache = (globalForAuth.__omniActiveCache ??= new Map())
+const userCache = (globalForAuth.__omniUserCache ??= new Map())
 
-/** Call after deactivating/reactivating a user so this process reflects it immediately. */
-export function invalidateActiveCache(userId?: string): void {
-  if (userId) activeCache.delete(userId)
-  else activeCache.clear()
+/** Drop one user's cached permissions (or all). Call on logout and on role/project/is_active changes. */
+export function invalidateUserCache(userId?: string): void {
+  if (userId) userCache.delete(userId)
+  else userCache.clear()
 }
 
-async function isUserActive(userId: string): Promise<boolean> {
-  const now = Date.now()
-  const cached = activeCache.get(userId)
-  if (cached && cached.expiresAt > now) return cached.active
+interface UserRow {
+  id: string
+  username: string
+  email: string
+  role: string
+  is_active: boolean
+}
 
+async function loadUser(userId: string): Promise<User | null> {
   const sql = getDb()
-  const rows = await sql<{ is_active: boolean }[]>`
-    SELECT is_active FROM app_users WHERE id = ${userId}
+  const rows = await sql<UserRow[]>`
+    SELECT id, username, email, role, is_active FROM app_users WHERE id = ${userId}
   `
-  const active = rows[0]?.is_active === true
+  const row = rows[0]
+  if (!row || !row.is_active || !(ROLES as readonly string[]).includes(row.role)) return null
+  const role = row.role as Role
 
-  if (activeCache.size >= ACTIVE_CACHE_MAX_ENTRIES) {
-    for (const [key, entry] of activeCache) {
-      if (entry.expiresAt <= now) activeCache.delete(key)
-    }
-    if (activeCache.size >= ACTIVE_CACHE_MAX_ENTRIES) activeCache.clear()
+  // allowed_projects is null ONLY for admin. Others get their app_user_projects
+  // rows, or [] (sees nothing) when there are none.
+  let allowedProjects: string[] | null = null
+  if (role !== 'admin') {
+    const projectRows = await sql<{ folder_name: string }[]>`
+      SELECT folder_name FROM app_user_projects
+      WHERE user_id = ${row.id}
+      ORDER BY folder_name
+    `
+    allowedProjects = projectRows.map((p) => p.folder_name)
   }
-  activeCache.set(userId, { active, expiresAt: now + ACTIVE_CACHE_TTL_MS })
-  return active
+  return { id: row.id, username: row.username, email: row.email, role, allowed_projects: allowedProjects }
 }
 
-async function authenticateToken(token: string | undefined): Promise<JWTPayload> {
+async function getUserCached(userId: string): Promise<User | null> {
+  const now = Date.now()
+  const cached = userCache.get(userId)
+  if (cached && cached.expiresAt > now) return cached.user
+
+  const user = await loadUser(userId)
+
+  if (userCache.size >= USER_CACHE_MAX_ENTRIES) {
+    for (const [key, entry] of userCache) {
+      if (entry.expiresAt <= now) userCache.delete(key)
+    }
+    if (userCache.size >= USER_CACHE_MAX_ENTRIES) userCache.clear()
+  }
+  userCache.set(userId, { user, expiresAt: now + USER_CACHE_TTL_MS })
+  return user
+}
+
+/** For login: permissions for a user whose credentials were just verified. */
+export async function getCurrentUserById(userId: string): Promise<User | null> {
+  return getUserCached(userId)
+}
+
+async function authenticateToken(token: string | undefined): Promise<User> {
   const payload = await verifyToken(token)
   if (!payload) throw new AuthError(401, 'Unauthorized')
 
-  let active: boolean
+  let user: User | null
   try {
-    active = await isUserActive(payload.sub)
+    user = await getUserCached(payload.sub)
   } catch {
-    // Fail closed if the active-status check cannot be made.
+    // Fail closed if permissions cannot be loaded.
     throw new AuthError(503, 'Authentication service unavailable')
   }
-  if (!active) throw new AuthError(401, 'Unauthorized')
-  return payload
+  if (!user) throw new AuthError(401, 'Unauthorized')
+  return user
 }
 
 /**
- * For API route handlers. Verifies the omnimetrics_token cookie, then
- * re-checks app_users.is_active (cached ~60s). Throws AuthError (401/503).
+ * For API route handlers. Verifies the omnimetrics_token cookie (identity), then
+ * loads role, is_active and allowed_projects from the database (cached 60s).
+ * Throws AuthError (401/503). Every protected API route must call this.
  */
-export async function requireAuth(request: NextRequest): Promise<JWTPayload> {
+export async function requireAuth(request: NextRequest): Promise<User> {
   return authenticateToken(request.cookies.get(AUTH_COOKIE_NAME)?.value)
 }
 
 /**
  * For server components / layouts. Returns null instead of throwing, so the
- * caller can redirect('/login').
+ * caller can redirect('/login'). Every protected page must call this.
  */
-export async function getCurrentUser(): Promise<JWTPayload | null> {
+export async function getCurrentUser(): Promise<User | null> {
   const store = await cookies()
   try {
     return await authenticateToken(store.get(AUTH_COOKIE_NAME)?.value)

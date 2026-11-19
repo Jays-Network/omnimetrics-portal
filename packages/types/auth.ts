@@ -16,12 +16,12 @@ export interface User {
   allowed_projects: string[] | null
 }
 
-/** Claims carried in the omnimetrics_token JWT. */
+/**
+ * Claims carried in the omnimetrics_token JWT. Identity only: role, is_active
+ * and allowed_projects are always loaded from the database by requireAuth().
+ */
 export interface JWTPayload {
   sub: string
-  username: string
-  role: Role
-  allowed_projects: string[] | null
   iat?: number
   exp: number
 }

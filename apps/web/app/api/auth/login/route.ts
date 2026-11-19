@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
-import { ROLES, type Role, type User } from '@omnimetrics/types'
+import { ROLES } from '@omnimetrics/types'
 import { getDb } from '@/lib/db'
-import { setAuthCookie, signToken } from '@/lib/auth'
+import { getCurrentUserById, invalidateUserCache, setAuthCookie, signToken } from '@/lib/auth'
 import { writeAuditLog } from '@/lib/audit'
 import {
   clearFailures,
@@ -88,37 +88,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(INVALID, { status: 401 })
   }
 
-  const role = row.role as Role
-
-  // allowed_projects is null ONLY for admin. Builders/viewers get their
-  // app_user_projects rows; no rows = empty array = they see nothing.
-  let allowedProjects: string[] | null = null
-  if (role !== 'admin') {
-    const projectRows = await sql<{ folder_name: string }[]>`
-      SELECT folder_name FROM app_user_projects
-      WHERE user_id = ${row.id}
-      ORDER BY folder_name
-    `
-    allowedProjects = projectRows.map((p) => p.folder_name)
-  }
-
-  const token = await signToken({
-    sub: row.id,
-    username: row.username,
-    role,
-    allowed_projects: allowedProjects,
-  })
+  // Identity only: role and allowed_projects are loaded from the DB by requireAuth().
+  const token = await signToken({ sub: row.id })
 
   clearFailures(limiterKey)
   await writeAuditLog(row.id, 'login_success', { username: row.username, ip })
 
-  const user: User = {
-    id: row.id,
-    username: row.username,
-    email: row.email,
-    role,
-    allowed_projects: allowedProjects,
-  }
+  // Warm requireAuth's cache with fresh permissions for this login.
+  invalidateUserCache(row.id)
+  const user = await getCurrentUserById(row.id)
+  if (!user) return NextResponse.json(INVALID, { status: 401 })
   const response = NextResponse.json({ user })
   setAuthCookie(response, request, token)
   response.headers.set('Cache-Control', 'no-store')

@@ -1,5 +1,5 @@
 import { SignJWT, jwtVerify } from 'jose'
-import { ROLES, type JWTPayload, type Role } from '@omnimetrics/types'
+import type { JWTPayload } from '@omnimetrics/types'
 
 /**
  * Edge-safe JWT helpers (jose only: no database, no next/headers), so
@@ -21,14 +21,11 @@ export function getTokenLifetimeSeconds(): number {
   return (Number.isFinite(hours) && hours > 0 ? hours : 24) * 3600
 }
 
-export type TokenClaims = Pick<JWTPayload, 'sub' | 'username' | 'role' | 'allowed_projects'>
+/** Identity only. Never put role, is_active or allowed_projects in the token. */
+export type TokenClaims = Pick<JWTPayload, 'sub'>
 
 export async function signToken(claims: TokenClaims): Promise<string> {
-  return new SignJWT({
-    username: claims.username,
-    role: claims.role,
-    allowed_projects: claims.allowed_projects,
-  })
+  return new SignJWT({})
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.sub)
     .setIssuedAt()
@@ -36,40 +33,14 @@ export async function signToken(claims: TokenClaims): Promise<string> {
     .sign(getJwtSecret())
 }
 
-/** Verifies signature + expiry and validates the claim shapes. Returns null on any failure. */
+/** Verifies signature + expiry and the claim shapes. Returns null on any failure. */
 export async function verifyToken(token: string | undefined | null): Promise<JWTPayload | null> {
   if (!token) return null
   try {
     const { payload } = await jwtVerify(token, getJwtSecret(), { algorithms: ['HS256'] })
-    const { sub, username, role, allowed_projects, exp, iat } = payload as Record<string, unknown>
-
-    if (typeof sub !== 'string' || typeof username !== 'string' || typeof exp !== 'number') {
-      return null
-    }
-    if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) return null
-
-    let projects: string[] | null
-    if (allowed_projects === null) {
-      projects = null
-    } else if (
-      Array.isArray(allowed_projects) &&
-      allowed_projects.every((p) => typeof p === 'string')
-    ) {
-      projects = allowed_projects as string[]
-    } else {
-      return null
-    }
-    // allowed_projects is null ONLY for admin.
-    if ((role === 'admin') !== (projects === null)) return null
-
-    return {
-      sub,
-      username,
-      role: role as Role,
-      allowed_projects: projects,
-      exp,
-      iat: typeof iat === 'number' ? iat : undefined,
-    }
+    const { sub, exp, iat } = payload
+    if (typeof sub !== 'string' || sub.length === 0 || typeof exp !== 'number') return null
+    return { sub, exp, iat: typeof iat === 'number' ? iat : undefined }
   } catch {
     return null
   }
