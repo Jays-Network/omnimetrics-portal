@@ -6,7 +6,9 @@
     "dev": "next dev -p 3002 -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3002 -H 127.0.0.1",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@omnimetrics/types": "workspace:*",
@@ -28,10 +30,15 @@
   "devDependencies": {
     "@omnimetrics/tsconfig": "workspace:*",
     "@tailwindcss/postcss": "^4.1.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "jsdom": "^31.0.1",
     "tailwindcss": "^4.1.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^5.1.1"
   }
 }
