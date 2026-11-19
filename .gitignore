@@ -6,3 +6,5 @@ node_modules/
 !.env.local.example
 *.log
 *.tsbuildinfo
+db/migrations/002_seed_admin.sql
+db/migrations/003_portal_app_role.sql

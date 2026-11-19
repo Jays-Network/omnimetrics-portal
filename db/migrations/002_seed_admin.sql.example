@@ -1,0 +1,32 @@
+-- 002_seed_admin.sql.example
+-- Creates the FIRST admin user.
+--
+-- 1. Generate a bcrypt hash (cost 12). The password is typed at a hidden
+--    prompt and is never passed on the command line:
+--
+--      node scripts/hash-password.mjs
+--
+-- 2. Copy this file to db/migrations/002_seed_admin.sql (that name is
+--    git-ignored), replace the placeholders, and run it as jaysnet_admin
+--    (or portal_app, once 003 has been applied):
+--
+--      psql -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/002_seed_admin.sql
+--
+--    Bcrypt hashes contain '$' characters; keep the value inside the single
+--    quotes below and run the file with -f (not inline with -c in a shell).
+--
+-- Do not commit the real file or the real hash.
+
+INSERT INTO app_users (username, email, hashed_password, role)
+VALUES (
+    'CHANGE_ME_USERNAME',
+    'CHANGE_ME@example.com',
+    '<BCRYPT_HASH_FROM_hash-password.mjs>',   -- e.g. $2b$12$................................................
+    'admin'
+);
+
+-- Admins need no app_user_projects rows (they see all projects).
+-- Builders and viewers do: one row per folder_name they may see, e.g.
+--
+--   INSERT INTO app_user_projects (user_id, folder_name)
+--   SELECT id, 'FQM Tracking Sheets' FROM app_users WHERE username = 'some_viewer';

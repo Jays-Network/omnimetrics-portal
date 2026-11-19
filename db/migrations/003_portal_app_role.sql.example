@@ -1,0 +1,44 @@
+-- 003_portal_app_role.sql.example
+-- Least-privilege database role for the portal's own tables.
+--
+-- The portal connects as portal_app (DATABASE_URL). It can touch ONLY
+-- app_users, app_user_projects and app_audit_log, and has no access to
+-- worldrisk_tracking, adars_tracking or anything else. Tracking-data reads go
+-- through grafana_reader (DATABASE_URL_READONLY).
+--
+-- Run AFTER 001_app_tables.sql, as a role that may create roles (e.g. the
+-- postgres superuser). Copy to a git-ignored name first and set a real password:
+--
+--   cp db/migrations/003_portal_app_role.sql.example db/migrations/003_portal_app_role.sql
+--   (edit the password)
+--   sudo -u postgres psql -d jaysnet_data -f db/migrations/003_portal_app_role.sql
+--
+-- (Run by you, by hand. Generate a password with: openssl rand -base64 32)
+
+BEGIN;
+
+CREATE ROLE portal_app LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD'
+    NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+
+-- Defence in depth: cap any single statement at 10s for this role.
+ALTER ROLE portal_app SET statement_timeout = '10s';
+
+GRANT CONNECT ON DATABASE jaysnet_data TO portal_app;
+GRANT USAGE ON SCHEMA public TO portal_app;
+
+-- Users: no DELETE (users are deactivated, not deleted).
+GRANT SELECT, INSERT, UPDATE ON app_users TO portal_app;
+
+-- Project assignments: assign (INSERT) and remove (DELETE).
+GRANT SELECT, INSERT, DELETE ON app_user_projects TO portal_app;
+
+-- Audit log is append-only for the application: no UPDATE, no DELETE.
+GRANT SELECT, INSERT ON app_audit_log TO portal_app;
+GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq TO portal_app;
+
+COMMIT;
+
+-- Optional checks after running (as the postgres superuser):
+--   SELECT has_table_privilege('portal_app', 'worldrisk_tracking', 'SELECT');  -- expect false
+--   SELECT has_table_privilege('portal_app', 'adars_tracking',     'SELECT');  -- expect false
+--   SELECT has_table_privilege('portal_app', 'app_users',          'SELECT');  -- expect true
