@@ -1,5 +1,8 @@
 node_modules/
 .next/
+.turbo/
 .env
 .env.*
+!.env.local.example
 *.log
+*.tsbuildinfo

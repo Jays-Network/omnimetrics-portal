@@ -1,0 +1,19 @@
+{
+  "name": "omnimetrics-portal",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "hash-password": "node scripts/hash-password.mjs"
+  },
+  "devDependencies": {
+    "bcryptjs": "^3.0.2",
+    "turbo": "^2.5.0"
+  }
+}
