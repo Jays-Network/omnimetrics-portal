@@ -20,7 +20,7 @@ export function LogoutButton() {
   }
 
   return (
-    <Button variant="outline" onClick={logout} disabled={busy}>
+    <Button variant="outline" size="sm" onClick={logout} disabled={busy}>
       <LogOut className="size-4" />
       Sign out
     </Button>

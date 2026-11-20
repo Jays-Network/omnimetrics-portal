@@ -1,7 +1,7 @@
 # Phase 2 plan: WorldRisk Tracking Sheets (Steps 2 to 4)
 
 Status: DRAFT, plan only. Nothing is built. Waiting for Jay to reply "approved".
-Sources read: `docs/CONTEXT.md` (R1 to R5), `CLAUDE.md`, `docs/PROGRESS.md`, and `grafana-export/Worldrisk Tracking Sheets-1795125057812.json` (Grafana v2 schema; panel SQL is at `spec.elements["panel-N"].spec.data.spec.queries[0].spec.query.spec.rawSql`).
+Sources read: `docs/CONTEXT.md` (R1 to R6), `CLAUDE.md`, `docs/PROGRESS.md`, and `grafana-export/Worldrisk Tracking Sheets-1795125057812.json` (Grafana v2 schema; panel SQL is at `spec.elements["panel-N"].spec.data.spec.queries[0].spec.query.spec.rawSql`).
 Scope: this dashboard only, admin-only, no client logins. Refresh 1m. Grafana default time range `now-6h`.
 
 ## 0. Variable and macro mapping (applies to every panel)
@@ -36,10 +36,10 @@ Cross-panel facts the SQL shows (all verified in the JSON, not from memory):
 All panels also have `workspace_name != 'WorldRisk Contractors'` (note: this drops rows where `workspace_name` is NULL).
 Each panel keeps its own list as a named constant. They are not merged (CONTEXT 3.12).
 
-Known copy-paste slips inside the country CASE (shared across panels, port faithfully and flag, R5):
+Known copy-paste slips inside the country CASE (shared across panels; default = Grafana's definition, listed in DECISIONS.md D8, flag in code):
 - Destination block uses `loading_location` instead of `offloading_location` for `%Mikas%` (DRC) and `%Palapye%` (Botswana) in P1, P9, P11, P12. P2 has them right.
 - Destination block, South Africa: `%Weinert%` uses `loading_location` in P11 and P12 only.
-- Port design: the keyword lists live once in `countries.ts` and are bound as `ILIKE ANY($n::text[])` (equivalent to the OR chain). The slips are per-panel "quirk" flags, on by default to match Grafana, listed in the deviation log, to be fixed only on Jay's ruling.
+- Port design: the keyword lists live once in `countries.ts` and are bound as `ILIKE ANY($n::text[])` (equivalent to the OR chain). The slips are per-panel "quirk" flags, on by default (default = Grafana's definition, listed in DECISIONS.md D8), fixed only on Jay's ruling (R6).
 
 ## 1. Panels, in order
 
@@ -121,23 +121,23 @@ Same as 1.5 (Type B, same exclusions, same project matcher) except: `base_data` 
 - **Create:** `lib/queries/worldrisk/monthly.ts`, `app/api/dashboard/worldrisk/monthly/route.ts`, Zustand filter store, TanStack Query hooks (refresh interval selector deferred), `components/dashboard/{StatCard,BarChartCard,FilterBar}.tsx`, shadcn `components/ui/chart.tsx`, `app/dashboard/worldrisk/page.tsx` (admin-only, reads `requireAuth()`), `docs/PARITY_PHASE2.md`.
 - **New dependency (Q12):** `recharts` is not in `apps/web/package.json`. I need your OK before adding it.
 - **Tests:** Vitest for the Monthly builder (billing-month fragment, Type A order, params, first predicate, `LIMIT`); a TS reference of the billing-month rule checked on edge dates (month ending Thursday, Friday, year rollover); component render tests for `StatCard` and `BarChartCard`.
-- **Side-by-side with Grafana :3000:** same folder(s), same country, same range. Jay supplies the Grafana numbers (I cannot log in to Grafana), I supply the portal numbers. Results go into `docs/PARITY_PHASE2.md`, one row per panel and filter combination, with expected divergences from Q2 to Q4 pre-listed. Mismatches are logged, not fixed (R5).
+- **Side-by-side with Grafana :3000:** same folder(s), same country, same range. Jay supplies the Grafana numbers (I cannot log in to Grafana), I supply the portal numbers. Results go into `docs/PARITY_PHASE2.md`, one row per panel and filter combination, with expected divergences from Q2 to Q4 pre-listed. Every difference is explained in the table; anything that changes a number goes to DECISIONS.md and waits for Jay's ruling (R5, R6).
 - **Stop:** typecheck, tests and build green; Grand Total and Monthly rendering; parity table filled. Wait for Jay's review.
 
 ## 3. Open questions (answer before Step 2)
 
 Conflicts with CONTEXT.md or the rules (I have not chosen):
-1. CONTEXT 3.6 and 6.5 say Tracking Sheets uses the first-non-null `best_date`. In the JSON only Monthly (P1) and Dispatched (P9) do. Daily (P11) and Weekly (P12) use the earliest-date two-tier version, and the other panels use `booking_date`. Daily, Weekly and Monthly totals therefore will not reconcile. Port each as coded?
-2. Daily and Weekly scope by `mapped_project_name` (client from `raw_data`, Bridge -> "Steinweg Bridge"), the CASE that R2 says not to port, and a mapped label cannot be the scoping key. My plan scopes them by raw `folder_name` and keeps their client exclusions. Counts will differ from Grafana where the client differs from the folder. Confirm?
-3. Monthly and Dispatched map the Glencore "Moxico Mine- Zambia" sheet to its own label. With raw scoping, selecting `Glencore` includes the Moxico rows (819) and there is no separate Moxico option. CONTEXT Q3 defers this. OK to follow the default (raw `folder_name` only)?
-4. Monthly and Dispatched also pull rows from `%Cross border Archives%` folders by client label. Raw-folder scoping cannot express that, and "folder_name first" would drop them. Drop the branch (recorded deviation) or keep it?
-5. `$projects` has no `allValue`, so in Grafana `'All' IN ($projects)` is probably never true and "All" expands to the dropdown labels. So "All" excludes folders the dropdown filters out (`%Old%`, `%Archive%`, GDG, Suleman Roadway Logistics, Trafalgar, Workspace Root, WorldRisk Contractors) and, in the panels that filter on raw `folder_name`, any folder whose label differs. Should portal "All" = every raw folder except those exclusions and `test sheets`? I will verify the Grafana behaviour side by side.
-6. Time range: Grafana defaults to `now-6h`, applied to a date column. What default range should the portal use, and in which timezone? (Grafana's is browser time.)
+1. CONTEXT 3.6 and 6.5 say Tracking Sheets uses the first-non-null `best_date`. In the JSON only Monthly (P1) and Dispatched (P9) do. Daily (P11) and Weekly (P12) use the earliest-date two-tier version, and the other panels use `booking_date`. Daily, Weekly and Monthly totals therefore will not reconcile. Default = Grafana's definition per panel, listed in DECISIONS.md (D1).
+2. Daily and Weekly scope by `mapped_project_name` (client from `raw_data`, Bridge -> "Steinweg Bridge"), the CASE that R2 says not to port, and a mapped label cannot be the scoping key. My plan scopes them by raw `folder_name` and keeps their client exclusions. Counts will differ from Grafana where the client differs from the folder. Recorded in DECISIONS.md (D2); until Jay rules, the default is Grafana's definition.
+3. Monthly and Dispatched map the Glencore "Moxico Mine- Zambia" sheet to its own label. With raw scoping, selecting `Glencore` includes the Moxico rows (819) and there is no separate Moxico option. CONTEXT Q3 defers this. Recorded in DECISIONS.md (D3); default = Grafana's definition until ruled.
+4. Monthly and Dispatched also pull rows from `%Cross border Archives%` folders by client label. Raw-folder scoping cannot express that, and "folder_name first" would drop them. Recorded in DECISIONS.md (D4); default = Grafana's definition (keep the branch) until ruled.
+5. `$projects` has no `allValue`, so in Grafana `'All' IN ($projects)` is probably never true and "All" expands to the dropdown labels. So "All" excludes folders the dropdown filters out (`%Old%`, `%Archive%`, GDG, Suleman Roadway Logistics, Trafalgar, Workspace Root, WorldRisk Contractors) and, in the panels that filter on raw `folder_name`, any folder whose label differs. Recorded in DECISIONS.md (D5). Default = Grafana's behaviour (all dropdown labels, minus the exclusions and `test sheets`) until ruled. I will verify the Grafana behaviour side by side.
+6. Time range: Grafana defaults to `now-6h`, applied to a date column. What default range should the portal use, and in which timezone? (Grafana's is browser time.) Recorded in DECISIONS.md (D10); default = Grafana's definition until ruled.
 
-Needed to port faithfully:
-7. Country filter has two semantics (current_location for Grand Total and Active Tracks, origin/destination for the rest), and `Other` cannot be selected. Keep both?
-8. Port the `loading_location`-in-destination slips (Mikas, Palapye, and Weinert for Daily/Weekly) as-is with quirk flags, to fix only on your ruling?
-9. R4 covers the Grand Total 60 days. Active Tracks is coded as 30 days (comment says 90) and has a different sheet exclusion list. Port it as coded?
+Needed to match Grafana's definition by default (R6; each is an entry in DECISIONS.md):
+7. Country filter has two semantics (current_location for Grand Total and Active Tracks, origin/destination for the rest), and `Other` cannot be selected. Default = Grafana's definition, listed in DECISIONS.md (D9).
+8. The `loading_location`-in-destination slips (Mikas, Palapye, and Weinert for Daily/Weekly): default = Grafana's definition with quirk flags, listed in DECISIONS.md (D8); fix only on your ruling.
+9. R4 covers the Grand Total 60 days. Active Tracks is coded as 30 days (comment says 90) and has a different sheet exclusion list. Default = Grafana's definition, listed in DECISIONS.md (D6, D7).
 10. Heatmap: skip entirely in Phase 2 (my assumption), or add a plain table of the top destinations?
 11. `--persist` writes `design-system/omnimetrics/MASTER.md`. OK to condense it into `docs/design/DIRECTION.md` and delete the generated folder?
 12. May I add `recharts` (needed for shadcn charts, the stack in CLAUDE.md) in Step 4?

@@ -24,11 +24,13 @@ Exclude the folder `test sheets` from every query, filter list, count and chart,
 
 **R2. Steinweg Bridge is a client in general, but in the FQM and Glencore folders it is a transporter.** [Jay]
 Rows in `FQM Tracking Sheets` and `Glencore` that mention Bridge must be calculated as a transporter, never as the client "Steinweg Bridge". Grafana's mapped-label `CASE` (`folder_name ILIKE '%Bridge%' OR sheet_name ILIKE '%Bridge%'` gives `'Steinweg Bridge'`) mislabels them, so do not port that `CASE` as-is. Observed rows: `FQM Tracking Sheets` 7,260 and `Glencore` 53 (section 5). The FQM dashboard already normalises transporters, with BRIDGE SHIPPING as one of them [Chat Apr 2026, JSON].
-**The transporter is always the `transporter` column.** [Jay, 2026-11-20] Never derive a transporter from `folder_name`, `sheet_name` or `client_name`. Steinweg Bridge uses subcontractors, so Bridge rows can be ambiguous. Jay will sort this out in the final data-comparison phase. Until then, port faithfully and do not guess.
+**The transporter is always the `transporter` column.** [Jay, 2026-11-20] Never derive a transporter from `folder_name`, `sheet_name` or `client_name`. Steinweg Bridge uses subcontractors, so Bridge rows can be ambiguous. Jay will sort this out in the final data-comparison phase. Until then, default = Grafana's definition, listed in docs/DECISIONS.md; do not guess.
 
 **R4. Grand Total (Tracking Sheets) uses the 60-day window as coded.** [Jay] The code is newer than its comment, so the code wins. The "90 days" comment is wrong.
 
-**R5. Data is verified against Grafana in the final comparison phase.** [Jay] Build panel by panel, compare to Grafana at :3000 as each panel lands, and settle the open data questions then, not by guessing now.
+**R5. Grafana is a reference, not a target.** [Jay] We reuse Grafana SQL where it is good and change anything that is better. The side-by-side check against Grafana at :3000 exists to explain every difference, not to force equality.
+
+**R6. Change rule.** Presentation, layout, interactions and query performance may be improved freely. Any change that alters a number a client or Jay would see (metric definition, time window, best_date, exclusions, scoping, what 'All' means) must be recorded in docs/DECISIONS.md with: Grafana behaviour, proposed portal behaviour, effect on counts, and wait for Jay's ruling. Until ruled, the default is Grafana's definition.
 
 **R3. Misalignment costs hours.** [Jay]
 Context first, then SQL. Confirm each stage before moving on.
@@ -79,7 +81,7 @@ Other standing statements by Jay in past chats:
 3. Master Alerts triggers (WorldRisk Audit): T1 no update, T2 border check failed/overdue (from JSON in `raw_data`), T3 overdue forecast, T4 multi-trip/duplicate. `NULL::integer` padding keeps UNION ALL columns aligned. [architecture brief]
 4. Border check failed: logic lives in the Audit JSON. Copy it from there, do not rewrite it from memory.
 5. A dispatch is `COUNT(DISTINCT UPPER(REPLACE(reg_number,' ','')) || best_date)`.
-6. `best_date` differs by dashboard and, on Tracking Sheets, by panel (section 6, item 5). Port per panel. Do not unify.
+6. `best_date` differs by dashboard and, on Tracking Sheets, by panel (section 6, item 5). Default = Grafana's definition per panel, listed in docs/DECISIONS.md (D1). Do not unify without a ruling.
 7. Duplicate entry: keep the latest row per (clean_reg, best_date) by `row_modified_at`, then group by invoicing period `(date_trunc('month', best_date - interval '24 days') + interval '24 days')::date`; a duplicate is a group with more than one row. The table returns every occurrence.
 8. Duplicate exclusions seen in chats (sheet_name): Invoice/invoicing, GDG, Trafalgar, Suleman Roadway Logistics, SRL Tracking Sheet, Bridge Cross Border invoicing Sheet, JHB Local, DBN Local, DBN-PE; client_name: Reload Aquarius Shipping, RELOAD ZLT; and the `Moxico Mine- Zambia` label. Other exclusions may exist in the Audit JSON; copy from there.
 9. Tracking Sheets billing month runs from the last Friday to the last Thursday of the month (custom `CASE` on `best_date`).
@@ -116,7 +118,7 @@ So these rows are not mis-bucketed by folder: the folder is right and Grafana's 
 
 ## 6. Known inconsistencies in the Grafana exports
 
-Port faithfully, record in a comment, do not fix without Jay's ruling.
+Default = Grafana's definition until Jay rules (R6). Each is an open entry in docs/DECISIONS.md; record it in a `// DEVIATION:` or quirk-flag comment in code.
 
 1. The Tracking Sheets `projects` dropdown shows mapped labels, but its panels filter `folder_name IN ($projects)` on the raw column. Selecting a label with no matching folder name (for example Moxico Mine- Zambia) returns nothing. "All" probably expands to the label list (the variable has `includeAll` and no `allValue`, so the `'All' IN ($projects)` bypass in some panels likely never fires). To be confirmed side by side at :3000. Note that not every panel filters on the raw column: Daily and Weekly filter on a client-derived `mapped_project_name`, Monthly and Dispatched on a Moxico CASE plus a "Cross border Archives" client branch.
 2. `test sheets` is excluded in the Audit project list but not in the Tracking Sheets or Devices lists. R1 supersedes.
@@ -157,7 +159,7 @@ Resolved:
 - **Q1.** Transporter is always the `transporter` column (R2). Bridge subcontractor ambiguity is deferred to the final data phase.
 - **Q8.** Grand Total uses 60 days (R4).
 
-Deferred by Jay to the final data-comparison phase (R5). Working defaults until then, which are not rulings:
+Deferred by Jay to the final data-comparison phase. Working defaults until then, which are not rulings (changes go through R6 / docs/DECISIONS.md):
 - **Q2.** Besides `FQM Tracking Sheets` and `Glencore`, is Bridge a transporter in any other folder? Default: no extra handling.
 - **Q3.** Inside the Glencore folder, is `Moxico Mine- Zambia` a separate client with its own users? Default: scope by `folder_name` only and create no client logins yet.
 - **Q4.** Phase 2 is the Tracking Sheets dashboard only.

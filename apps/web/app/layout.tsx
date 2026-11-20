@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import type { CSSProperties, ReactNode } from 'react'
 import { DM_Sans, Syne } from 'next/font/google'
 import { Providers } from '@/components/providers'
+import { FX_BOOT_SCRIPT } from '@/components/fx/fx-core'
 import './globals.css'
 
 const syne = Syne({ subsets: ['latin'], variable: '--font-syne', display: 'swap' })
@@ -30,6 +31,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
   return (
     <html lang="en" className={`${syne.variable} ${dmSans.variable} dark`} style={brandStyle} suppressHydrationWarning>
+      <head>
+        {/* Sets <html data-fx> before first paint (no flash). See components/fx/fx-core.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: FX_BOOT_SCRIPT }} />
+      </head>
       <body>
         <Providers>{children}</Providers>
       </body>

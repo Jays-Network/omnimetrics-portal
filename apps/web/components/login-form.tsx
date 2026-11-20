@@ -2,12 +2,10 @@
 
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { GlowInput } from '@/components/fx/glow-input'
+import { NeonButton } from '@/components/fx/neon-button'
 
-export function LoginForm({ next }: { next: string }) {
+export function LoginForm({ next, onSuccess }: { next: string; onSuccess?: () => void | Promise<void> }) {
   const router = useRouter()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -26,6 +24,7 @@ export function LoginForm({ next }: { next: string }) {
         credentials: 'same-origin',
       })
       if (res.ok) {
+        await onSuccess?.() // visual transition only; the redirect below is unchanged
         router.replace(next)
         router.refresh()
         return
@@ -47,53 +46,45 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <Card>
-      <form onSubmit={onSubmit} noValidate>
-        <CardHeader className="pb-4" />
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="username" className="text-sm font-medium text-brand-text">
-              Username
-            </label>
-            <Input
-              id="username"
-              name="username"
-              autoComplete="username"
-              autoFocus
-              required
-              maxLength={100}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium text-brand-text">
-              Password
-            </label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              maxLength={128}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={submitting}
-            />
-          </div>
-          <p role="alert" aria-live="polite" className="min-h-5 text-sm text-brand-danger">
-            {error}
-          </p>
-        </CardContent>
-        <CardFooter>
-          <Button type="submit" className="w-full" disabled={submitting || !username || !password}>
-            {submitting ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> : null}
-            {submitting ? 'Signing in…' : 'Sign in'}
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
+    <form onSubmit={onSubmit} noValidate className="space-y-4 p-6">
+      <div className="space-y-2">
+        <label htmlFor="username" className="text-sm font-medium text-brand-text">
+          Username
+        </label>
+        <GlowInput
+          id="username"
+          name="username"
+          autoComplete="username"
+          autoFocus
+          required
+          maxLength={100}
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          disabled={submitting}
+        />
+      </div>
+      <div className="space-y-2">
+        <label htmlFor="password" className="text-sm font-medium text-brand-text">
+          Password
+        </label>
+        <GlowInput
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          required
+          maxLength={128}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          disabled={submitting}
+        />
+      </div>
+      <p role="alert" aria-live="polite" className="min-h-5 text-sm text-brand-danger">
+        {error}
+      </p>
+      <NeonButton type="submit" className="w-full" loading={submitting} disabled={!username || !password}>
+        {submitting ? 'Signing in…' : 'Sign in'}
+      </NeonButton>
+    </form>
   )
 }

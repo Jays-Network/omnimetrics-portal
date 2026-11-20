@@ -55,6 +55,10 @@
   --color-brand-danger: var(--brand-danger);
   --color-brand-danger-fg: var(--brand-danger-fg);
 
+  --color-glow-1: var(--glow-1);
+  --color-glow-2: var(--glow-2);
+  --color-glow-3: var(--glow-3);
+
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -86,4 +90,573 @@ body {
 /* Numbers line up in tables, stat cards and axes. */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+
+/* ==========================================================================
+ * Holographic HUD tokens (docs/design/DIRECTION.md)
+ *
+ * Effects level: <html data-fx="full|reduced|off">, set before first paint by
+ * the inline script in layout.tsx (components/fx/fx-core.ts). Any element can
+ * carry its own data-fx (used by /dev/ui); everything below is plain custom
+ * properties, so the NEAREST data-fx ancestor wins and nothing needs a
+ * selector per level. Components read variables, never the level directly.
+ * ========================================================================== */
+:root {
+  /* Glow colours (white-label: re-point these three, nothing else) */
+  --glow-1: var(--brand-accent); /* cyan  */
+  --glow-2: var(--chart-3); /* blue  */
+  --glow-3: var(--chart-2); /* purple */
+
+  /* Shape of the effect (level-independent) */
+  --fx-blur-1: 8px;
+  --fx-blur-2: 14px;
+  --fx-blur-3: 22px;
+  --fx-border-gradient: linear-gradient(135deg, var(--glow-1), var(--glow-3));
+  --fx-neon-gradient: linear-gradient(90deg, var(--glow-1), var(--glow-2));
+  --fx-text-gradient: linear-gradient(100deg, var(--glow-1), var(--glow-2) 50%, var(--glow-3));
+
+  /* Motion tokens (mirrored in components/fx/fx-tokens.ts) */
+  --fx-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --fx-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --fx-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --fx-t-fast: 140ms;
+  --fx-t-base: 240ms;
+  --fx-t-slow: 520ms;
+  --fx-t-hero: 900ms;
+  --fx-stagger: 80ms;
+  --fx-t-ambient: 18s;
+}
+
+/* Level variables. Set on :root (default = full) and on any [data-fx] scope. */
+:root,
+[data-fx='full'] {
+  --fx-motion: 1; /* 1 = transitions/entrances run; 0 = instant */
+  --fx-play: running; /* ambient loops */
+  --fx-glow: 1; /* glow strength 0..1 */
+  --fx-ambient: 1; /* static ambient layers (aurora, grid) */
+  --fx-backdrop: blur(var(--fx-blur-2)) saturate(1.35);
+  --fx-edge: 1; /* gradient border strength */
+  --fx-glass-a1: 38%;
+  --fx-glass-a2: 62%;
+  --fx-glass-a3: 78%;
+  --fx-glass-data: 93%;
+}
+[data-fx='reduced'] {
+  --fx-motion: 0;
+  --fx-play: paused;
+  --fx-glow: 0.5;
+  --fx-ambient: 0.6;
+  --fx-backdrop: none;
+  --fx-edge: 0.7;
+  --fx-glass-a1: 70%;
+  --fx-glass-a2: 86%;
+  --fx-glass-a3: 92%;
+  --fx-glass-data: 96%;
+}
+[data-fx='off'] {
+  --fx-motion: 0;
+  --fx-play: paused;
+  --fx-glow: 0;
+  --fx-ambient: 0;
+  --fx-backdrop: none;
+  --fx-edge: 0;
+  --fx-glass-a1: 100%;
+  --fx-glass-a2: 100%;
+  --fx-glass-a3: 100%;
+  --fx-glass-data: 100%;
+}
+/* The OS setting always wins over the chosen level. */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  [data-fx] {
+    --fx-motion: 0;
+    --fx-play: paused;
+  }
+}
+
+/* Derived tokens: recomputed in every scope so they follow the level. */
+:root,
+[data-fx] {
+  --glass-1: color-mix(in srgb, var(--brand-surface) var(--fx-glass-a1), transparent);
+  --glass-2: color-mix(in srgb, var(--brand-surface) var(--fx-glass-a2), transparent);
+  --glass-3: color-mix(in srgb, var(--brand-surface) var(--fx-glass-a3), transparent);
+  --glass-data: color-mix(in srgb, var(--brand-surface) var(--fx-glass-data), transparent);
+
+  --glow-1-soft: color-mix(in srgb, var(--glow-1) calc(22% * var(--fx-glow)), transparent);
+  --glow-1-mid: color-mix(in srgb, var(--glow-1) calc(45% * var(--fx-glow)), transparent);
+  --glow-1-strong: color-mix(in srgb, var(--glow-1) calc(75% * var(--fx-glow)), transparent);
+  --glow-2-mid: color-mix(in srgb, var(--glow-2) calc(45% * var(--fx-glow)), transparent);
+  --glow-3-soft: color-mix(in srgb, var(--glow-3) calc(22% * var(--fx-glow)), transparent);
+  --glow-3-mid: color-mix(in srgb, var(--glow-3) calc(45% * var(--fx-glow)), transparent);
+
+  /* Time tokens collapse to 0 when motion is off, so one rule serves all levels. */
+  --d-fast: calc(var(--fx-t-fast) * var(--fx-motion));
+  --d-base: calc(var(--fx-t-base) * var(--fx-motion));
+  --d-slow: calc(var(--fx-t-slow) * var(--fx-motion));
+  --d-hero: calc(var(--fx-t-hero) * var(--fx-motion));
+  --d-stagger: calc(var(--fx-stagger) * var(--fx-motion));
+}
+
+/* Tab hidden: every animation stops (flag set by the inline script). */
+html[data-hidden] *,
+html[data-hidden] *::before,
+html[data-hidden] *::after {
+  animation-play-state: paused !important;
+}
+
+/* --- Keyframes (transform / opacity only) --------------------------------- */
+@keyframes fx-aurora-a {
+  0%, 100% { transform: translate3d(-6%, -4%, 0) scale(1); }
+  50% { transform: translate3d(8%, 6%, 0) scale(1.15); }
+}
+@keyframes fx-aurora-b {
+  0%, 100% { transform: translate3d(6%, 4%, 0) scale(1.1); }
+  50% { transform: translate3d(-8%, -6%, 0) scale(0.95); }
+}
+@keyframes fx-aurora-c {
+  0%, 100% { transform: translate3d(0, 6%, 0) scale(0.95); }
+  50% { transform: translate3d(-5%, -8%, 0) scale(1.12); }
+}
+@keyframes fx-grid-scroll {
+  to { transform: translate3d(0, 56px, 0); }
+}
+@keyframes fx-scan {
+  0% { transform: translate3d(0, -10vh, 0); opacity: 0; }
+  8% { opacity: 1; }
+  60%, 100% { transform: translate3d(0, 110vh, 0); opacity: 0; }
+}
+@keyframes fx-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fx-spin-center {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+@keyframes fx-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes fx-pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+@keyframes fx-rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fx-shimmer {
+  to { transform: translate3d(100%, 0, 0); }
+}
+@keyframes fx-shine {
+  0%, 70% { transform: translate3d(-130%, 0, 0) skewX(-18deg); }
+  100% { transform: translate3d(130%, 0, 0) skewX(-18deg); }
+}
+@keyframes fx-warp {
+  0% { transform: scale(0.1); opacity: 0.9; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+@keyframes fx-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* --- Components ------------------------------------------------------------ */
+@layer components {
+  /* Entrance: add .fx-rise and style="--i:n". Visible when motion is off. */
+  .fx-rise {
+    animation: fx-rise var(--d-slow) var(--fx-ease-out) both;
+    animation-delay: calc(var(--i, 0) * var(--d-stagger));
+  }
+
+  /* ---- HoloBackground ---- */
+  .fx-holo {
+    container-type: size;
+    pointer-events: none;
+    overflow: hidden;
+    background: var(--brand-primary);
+  }
+  .fx-aurora {
+    position: absolute;
+    inset: -20%;
+    opacity: var(--fx-ambient);
+  }
+  .fx-aurora > i {
+    position: absolute;
+    border-radius: 9999px;
+    animation-duration: var(--fx-t-ambient);
+    animation-timing-function: var(--fx-ease-in-out);
+    animation-iteration-count: infinite;
+    animation-play-state: var(--fx-play);
+    will-change: transform;
+  }
+  .fx-aurora > i:nth-child(1) {
+    left: 5%; top: 5%; width: 55%; height: 55%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--glow-1) 42%, transparent), transparent);
+    animation-name: fx-aurora-a;
+  }
+  .fx-aurora > i:nth-child(2) {
+    right: 0; top: 15%; width: 50%; height: 60%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--glow-3) 40%, transparent), transparent);
+    animation-name: fx-aurora-b;
+    animation-duration: calc(var(--fx-t-ambient) * 1.3);
+  }
+  .fx-aurora > i:nth-child(3) {
+    left: 25%; bottom: -5%; width: 55%; height: 50%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--glow-2) 36%, transparent), transparent);
+    animation-name: fx-aurora-c;
+    animation-duration: calc(var(--fx-t-ambient) * 1.7);
+  }
+  .fx-grid {
+    position: absolute;
+    inset: -56px 0 0 0;
+    opacity: calc(0.5 * var(--fx-ambient));
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--glow-1) 22%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--glow-1) 22%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, #000 20%, transparent 75%);
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, #000 20%, transparent 75%);
+    animation: fx-grid-scroll 6s linear infinite;
+    animation-play-state: var(--fx-play);
+    will-change: transform;
+  }
+  .fx-scan {
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 120px;
+    opacity: 0;
+    background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--glow-1) 14%, transparent), transparent);
+    animation: fx-scan 11s linear infinite;
+    animation-play-state: var(--fx-play);
+  }
+  /* The banner is sized from the container (cq units) so the mask below lines up
+     with the artwork at any viewport. Only the outer 'network' bands stay: the
+     centre ghost logo and the bottom wordmark are masked out. */
+  .fx-banner {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100cqw, calc(100cqh * 1.6594));
+    aspect-ratio: 1920 / 1157;
+    transform: translate(-50%, -50%);
+    opacity: calc(0.62 * (0.35 + 0.65 * var(--fx-ambient)));
+    -webkit-mask-image:
+      linear-gradient(90deg, #000 0, #000 19%, transparent 25%),
+      linear-gradient(270deg, #000 0, #000 19%, transparent 25%);
+    mask-image:
+      linear-gradient(90deg, #000 0, #000 19%, transparent 25%),
+      linear-gradient(270deg, #000 0, #000 19%, transparent 25%);
+  }
+  .fx-vignette {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 75% 70% at 50% 45%, transparent 35%, color-mix(in srgb, var(--brand-primary) 85%, transparent) 100%),
+      linear-gradient(to bottom, color-mix(in srgb, var(--brand-primary) 55%, transparent), transparent 22%, transparent 70%, var(--brand-primary));
+  }
+
+  /* ---- GlassPanel ---- */
+  .fx-glass {
+    position: relative;
+    isolation: isolate;
+    border-radius: var(--radius-xl);
+    border: 1px solid color-mix(in srgb, var(--brand-border) calc(100% * (1 - var(--fx-edge))), transparent);
+    background: var(--glass-2);
+    -webkit-backdrop-filter: var(--fx-backdrop);
+    backdrop-filter: var(--fx-backdrop);
+    color: var(--brand-text);
+    box-shadow:
+      inset 0 0 28px -10px var(--glow-1-soft),
+      0 10px 40px -14px rgb(0 0 0 / 0.65);
+  }
+  .fx-glass[data-tone='1'] { background: var(--glass-1); }
+  .fx-glass[data-tone='3'] { background: var(--glass-3); }
+  /* Data glass: charts, tables, stat values. Near-opaque, never blurred (AA). */
+  .fx-glass[data-tone='data'] {
+    background: var(--glass-data);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  /* 1px cyan-to-purple gradient border (masked ring, static). */
+  .fx-glass::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--fx-border-gradient);
+    opacity: calc(0.8 * var(--fx-edge));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  /* HUD corner brackets. */
+  .fx-brackets::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    pointer-events: none;
+    --c: color-mix(in srgb, var(--glow-1) calc(35% + 55% * var(--fx-glow)), transparent);
+    --l: 14px;
+    --t: 2px;
+    background:
+      linear-gradient(var(--c), var(--c)) left top / var(--l) var(--t) no-repeat,
+      linear-gradient(var(--c), var(--c)) left top / var(--t) var(--l) no-repeat,
+      linear-gradient(var(--c), var(--c)) right top / var(--l) var(--t) no-repeat,
+      linear-gradient(var(--c), var(--c)) right top / var(--t) var(--l) no-repeat,
+      linear-gradient(var(--c), var(--c)) left bottom / var(--l) var(--t) no-repeat,
+      linear-gradient(var(--c), var(--c)) left bottom / var(--t) var(--l) no-repeat,
+      linear-gradient(var(--c), var(--c)) right bottom / var(--l) var(--t) no-repeat,
+      linear-gradient(var(--c), var(--c)) right bottom / var(--t) var(--l) no-repeat;
+  }
+  .fx-halo {
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow: 0 0 34px -2px var(--glow-1-mid), 0 0 70px -10px var(--glow-3-mid);
+    opacity: 0;
+    transition: opacity var(--d-base) var(--fx-ease-out);
+    z-index: -1;
+  }
+  .fx-glass:hover > .fx-halo { opacity: 1; }
+  .fx-clip {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .fx-spot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 340px;
+    height: 340px;
+    margin: -170px 0 0 -170px;
+    background: radial-gradient(circle closest-side, var(--glow-1-soft), transparent);
+    opacity: 0;
+    transition: opacity var(--d-base) linear;
+    will-change: transform;
+  }
+  .fx-glass:hover .fx-spot { opacity: calc(var(--fx-motion) * 1); }
+  .fx-sheen {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 45%;
+    background: linear-gradient(105deg, transparent, color-mix(in srgb, var(--brand-text) 10%, transparent) 45%, color-mix(in srgb, var(--glow-1) 14%, transparent) 55%, transparent);
+    transform: translate3d(-130%, 0, 0) skewX(-18deg);
+    opacity: var(--fx-motion);
+    will-change: transform;
+  }
+  .fx-glass:hover .fx-sheen {
+    transform: translate3d(330%, 0, 0) skewX(-18deg);
+    transition: transform calc(var(--fx-t-hero) * 1.2 * var(--fx-motion)) var(--fx-ease-out);
+  }
+  .fx-content { position: relative; z-index: 1; }
+
+  /* ---- NeonButton ---- */
+  .fx-neon {
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.75rem;
+    padding: 0 1.75rem;
+    border-radius: 9999px;
+    border: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--brand-accent-fg);
+    background: var(--fx-neon-gradient);
+    cursor: pointer;
+    transition:
+      transform var(--d-fast) var(--fx-ease-spring),
+      filter var(--d-fast) linear;
+  }
+  .fx-neon::before {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--fx-neon-gradient);
+    filter: blur(14px);
+    opacity: calc(0.65 * var(--fx-glow));
+    animation: fx-pulse 3.2s var(--fx-ease-in-out) infinite;
+    animation-play-state: var(--fx-play);
+  }
+  .fx-neon-clip {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .fx-neon-shine {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 40%;
+    background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.55), transparent);
+    opacity: var(--fx-motion);
+    transform: translate3d(-130%, 0, 0) skewX(-18deg);
+    animation: fx-shine 5.5s var(--fx-ease-in-out) infinite;
+    animation-play-state: var(--fx-play);
+  }
+  .fx-neon-label { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 0.5rem; }
+  .fx-neon:hover:not(:disabled) { filter: brightness(1.08) saturate(1.1); }
+  .fx-neon:active:not(:disabled) { transform: scale(calc(1 - 0.03 * var(--fx-motion))); filter: brightness(0.95); }
+  .fx-neon:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--brand-primary), 0 0 0 4px var(--brand-accent);
+  }
+  .fx-neon:disabled { opacity: 0.5; cursor: not-allowed; }
+  .fx-neon:disabled::before, .fx-neon:disabled .fx-neon-shine { animation: none; opacity: 0; }
+
+  /* ---- GlowInput ---- */
+  .fx-gi {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    padding: 1px;
+    border-radius: var(--radius-md);
+    background: var(--brand-border-strong); /* >= 3:1 edge at rest, every level */
+    transition: box-shadow var(--d-base) var(--fx-ease-out);
+  }
+  .fx-gi-ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 220%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(from 0deg, var(--glow-1), var(--glow-3), var(--glow-2), var(--glow-1));
+    opacity: 0;
+    transition: opacity var(--d-base) linear;
+    animation: fx-spin-center 3.2s linear infinite;
+    animation-play-state: var(--fx-play);
+    z-index: -1;
+  }
+  .fx-gi:focus-within {
+    outline: 2px solid var(--brand-accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 20px -2px var(--glow-1-mid);
+  }
+  .fx-gi:focus-within .fx-gi-ring { opacity: calc(var(--fx-glow) * 1); }
+  .fx-gi-field {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    padding: 0 0.75rem;
+    font-size: 0.875rem;
+    color: var(--brand-text);
+    background: var(--brand-primary);
+    border: 0;
+    border-radius: calc(var(--radius-md) - 1px);
+    outline: none;
+  }
+  .fx-gi-field::placeholder { color: var(--brand-text-muted); }
+  .fx-gi-field:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  /* ---- Skeleton / GradientText ---- */
+  .fx-skeleton {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--brand-surface-raised);
+  }
+  .fx-skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translate3d(-100%, 0, 0);
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glow-1) calc(18% * var(--fx-glow)), transparent), transparent);
+    animation: fx-shimmer 1.6s var(--fx-ease-in-out) infinite;
+    animation-play-state: var(--fx-play);
+  }
+  .fx-gradient-text {
+    background: var(--fx-text-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* ---- Emblem (login hero) ---- */
+  .fx-halo-pulse {
+    position: absolute;
+    inset: -30%;
+    border-radius: 9999px;
+    background: radial-gradient(closest-side, var(--glow-1-mid), var(--glow-3-soft) 55%, transparent);
+    animation: fx-pulse 5s var(--fx-ease-in-out) infinite;
+    animation-play-state: var(--fx-play);
+    opacity: var(--fx-glow);
+  }
+  .fx-orbit {
+    position: absolute;
+    inset: -14%;
+    animation: fx-spin 26s linear infinite;
+    animation-play-state: var(--fx-play);
+    opacity: calc(0.35 + 0.65 * var(--fx-glow));
+  }
+  .fx-orbit[data-rev] { inset: -26%; animation-duration: 40s; animation-direction: reverse; opacity: calc(0.25 + 0.5 * var(--fx-glow)); }
+
+  /* ---- Login success warp ---- */
+  .fx-warp {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 120vmax;
+    height: 120vmax;
+    margin: -60vmax 0 0 -60vmax;
+    border-radius: 9999px;
+    pointer-events: none;
+    z-index: 50;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--glow-1) 55%, transparent), color-mix(in srgb, var(--glow-3) 30%, transparent) 50%, transparent);
+    animation: fx-warp 700ms var(--fx-ease-out) both;
+  }
+
+  /* Login success: stage zooms and fades while the warp flashes (once). */
+  .fx-stage {
+    transition:
+      transform var(--d-slow) var(--fx-ease-in-out),
+      opacity var(--d-slow) var(--fx-ease-in-out);
+  }
+  .fx-stage[data-leaving] {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+
+  /* ---- Shell ---- */
+  .fx-nav-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: var(--nav-item-h);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(90deg, var(--glow-1-soft), transparent 80%);
+    transition: transform var(--d-slow) var(--fx-ease-spring);
+    pointer-events: none;
+  }
+  .fx-nav-indicator::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 18%;
+    bottom: 18%;
+    width: 3px;
+    border-radius: 9999px;
+    background: var(--glow-1);
+    box-shadow: 0 0 12px 1px var(--glow-1-strong);
+  }
+  .fx-live-dot {
+    animation: fx-blink 2.4s ease-in-out infinite;
+    animation-play-state: var(--fx-play);
+  }
 }
