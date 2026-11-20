@@ -22,7 +22,7 @@ Ubuntu 24.04 LXC, PostgreSQL 18 on localhost:5432, DB `jaysnet_data`. Dashboards
 Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in ./grafana-export/.
 
 ## Roadmap decisions (panel builder)
-- Panels are defined as typed JSON specs (dataset, filters, groupBy, measure, chart type) in packages/types and rendered generically. A visual block builder (Blockly) will later produce these specs. Never accept raw SQL from the browser.
+- Panels are defined as typed JSON specs (dataset, filters, groupBy, measure, chart type) in packages/types and rendered generically. A visual block builder (Blockly) will later produce these specs. Never accept raw SQL from the browser, except through the director-only SQL terminal (R7).
 - Roles are admin | builder | viewer. Builders and viewers only ever see data for their own allowed_projects, enforced server-side on every query.
 - Datasets expose plain-language field labels and an allowlist of columns; sensitive fields can be hidden per role.
 - Dashboard queries run as portal_reader with a statement_timeout and row limit.
@@ -40,4 +40,4 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 - Keep plugins to a minimum.
 
 ## Domain context (binding)
-Read docs/CONTEXT.md before writing any SQL, project scoping or dashboard code. Its rulings (R1 to R6) are binding; docs/DECISIONS.md logs every change that alters a number (R6). If anything conflicts with it, stop and ask; do not choose silently.
+Read docs/CONTEXT.md before writing any SQL, project scoping or dashboard code. Its rulings (R1 to R7) are binding; docs/DECISIONS.md logs every change that alters a number (R6). If anything conflicts with it, stop and ask; do not choose silently.

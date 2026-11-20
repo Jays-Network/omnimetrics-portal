@@ -53,5 +53,15 @@ Plan and Jay's answers: `docs/PLAN_PHASE2.md` (approved 2026-11-20). Domain ruli
 ## Phase 4/5 list
 - Security headers: CSP, X-Frame-Options (and related) on the web app / Nginx.
 
+## Builder track (docs/PLAN_BUILDER.md, approved 2026-11-20)
+Rule: M1 to M4 are UI on mock data only; every real table, migration, RLS, org enforcement and isolation test is M5, and no real integration credential is entered before the isolation matrix is green.
+Rulings recorded: R7 (SQL terminal is director-only; CLAUDE.md hard rule updated), one DB role per org (`portal_reader_wr`, `portal_reader_adars`; the 004 example must be reworked, NOT written yet), TOTP for platform admins before any client login, Accounts = login security + My account.
+- **M1 DONE (shell, nav, tabs on mock data), awaiting Jay's review.** Top tabs Dashboards | Integrations | Admin | Settings (hidden by capability), org switcher, MOCK badge, Admin sub-tabs (Organisations/Organisation, Users, Accounts), My account (`/dashboard/account`, via the name top right), director-only `/dashboard/platform/organisations` (mock table). Section pages are "Planned: Mx" placeholders.
+  - Files: `packages/types/portal.ts` (Org, Capability, `capabilitiesFor`, OrgAccess); `apps/web/lib/portal/` (`types.ts` Portal interface, `index.ts` `getPortal()` mock only in development, `mock/index.ts`, `org.ts` guards `requirePortalUser`, `requireOrgPage`, `requirePlatformPage`); `components/shell/` (`app-shell.tsx` rewritten as header tabs, `nav.ts`, `org-switcher.tsx`, `sub-tabs.tsx`, `page-intro.tsx`); routes under `app/dashboard/o/[orgSlug]/...`, `platform/`, `account/`, `not-found.tsx`; `tests/portal.test.ts`.
+  - Guards: every page calls its own guard; the `[orgSlug]` segment is a hint matched against accessible orgs (404 otherwise, existence not confirmed). Mock memberships follow the REAL session role (admin = director in both orgs; others get WorldRisk with their role). Auth is never bypassed. In production `getPortal()` throws until the pg implementation (M5); do not run production builds yet.
+  - Not in M1: dev-only "preview as role" (reduce-only, planned for M2); `.fx-nav-indicator` CSS in globals.css is now unused (left alone); last-used organisation is not remembered (first org is the default).
+  - Checks: typecheck and 54 tests green. `pnpm build` not run (Jay's dev server is up). Not clicked through in a browser by me.
+
 ## Next
-- Step 3 (shared base query, summary route, `004_portal_reader_role.sql.example`). Wait for Jay's "approved".
+- Jay reviews M1, then "approved" for M2 (org switcher refinements, content tree, dashboards list/viewer on mock data).
+- Step 3 stays parked until M5 (needs the per-org reader roles first).

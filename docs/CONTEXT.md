@@ -32,6 +32,9 @@ Rows in `FQM Tracking Sheets` and `Glencore` that mention Bridge must be calcula
 
 **R6. Change rule.** Presentation, layout, interactions and query performance may be improved freely. Any change that alters a number a client or Jay would see (metric definition, time window, best_date, exclusions, scoping, what 'All' means) must be recorded in docs/DECISIONS.md with: Grafana behaviour, proposed portal behaviour, effect on counts, and wait for Jay's ruling. Until ruled, the default is Grafana's definition.
 
+**R7. The SQL terminal is director-only.** [Jay, 2026-11-20, RULED]
+The portal may accept raw SQL from the browser only through the SQL terminal, and only for the director (platform admin), not org admins, in v1. Widening it needs a new ruling. It runs one parser-verified SELECT in a read-only, always-rolled-back transaction with timeout, row cap and a relation allowlist, against the active organisation's integration only, and every run (also rejected ones) is audit-logged. Terminal SQL is never saved into a panel and results are unfiltered by R1. Details: docs/PLAN_BUILDER.md section 6. Related decisions (same date): tracking reads use one DB role per organisation (`portal_reader_wr`, `portal_reader_adars`); TOTP for platform admins is required before any client login.
+
 **R3. Misalignment costs hours.** [Jay]
 Context first, then SQL. Confirm each stage before moving on.
 

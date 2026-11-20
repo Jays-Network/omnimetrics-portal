@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react'
-import { redirect } from 'next/navigation'
 import { MotionRoot } from '@/components/fx/motion-root'
 import { AppShell } from '@/components/shell/app-shell'
-import { getCurrentUser } from '@/lib/auth'
+import { requirePortalUser } from '@/lib/portal/org'
 
-// Shell for every /dashboard route. Pages still call getCurrentUser() themselves
-// (the shell is presentation, not the security boundary).
+// Shell for every /dashboard route. Pages still call their own guard
+// (requireOrgPage / requirePlatformPage / requirePortalUser): the shell is
+// presentation, not the security boundary.
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
-  const user = await getCurrentUser()
-  if (!user) redirect('/login')
+  const { user, portal, accessible } = await requirePortalUser()
   return (
     <MotionRoot>
-      <AppShell user={{ username: user.username, role: user.role }}>{children}</AppShell>
+      <AppShell user={{ username: user.username }} orgs={accessible} mode={portal.mode}>
+        {children}
+      </AppShell>
     </MotionRoot>
   )
 }
