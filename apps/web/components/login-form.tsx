@@ -89,7 +89,7 @@ export function LoginForm({ next }: { next: string }) {
         </CardContent>
         <CardFooter>
           <Button type="submit" className="w-full" disabled={submitting || !username || !password}>
-            {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
+            {submitting ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> : null}
             {submitting ? 'Signing in…' : 'Sign in'}
           </Button>
         </CardFooter>

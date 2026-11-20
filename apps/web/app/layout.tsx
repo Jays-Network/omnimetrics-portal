@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import type { CSSProperties, ReactNode } from 'react'
 import { DM_Sans, Syne } from 'next/font/google'
 import { Providers } from '@/components/providers'
@@ -11,8 +11,15 @@ const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? 'OmniMetrics'
 const BRAND_COLOR = process.env.NEXT_PUBLIC_BRAND_COLOR
 
 export const metadata: Metadata = {
-  title: BRAND_NAME,
+  title: { default: BRAND_NAME, template: `%s | ${BRAND_NAME}` },
   description: `${BRAND_NAME} fleet tracking portal`,
+  // Icons come from the file conventions in this folder: icon.png, apple-icon.png, favicon.ico.
+}
+
+// Keep in sync with --brand-primary in globals.css (browser chrome colour).
+export const viewport: Viewport = {
+  themeColor: '#0e182e',
+  colorScheme: 'dark',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

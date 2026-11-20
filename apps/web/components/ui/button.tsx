@@ -11,7 +11,7 @@ const buttonVariants = cva(
         outline:
           'border border-brand-border bg-transparent text-brand-text hover:bg-brand-surface',
         ghost: 'bg-transparent text-brand-text hover:bg-brand-surface',
-        destructive: 'bg-brand-danger text-white hover:opacity-90',
+        destructive: 'bg-brand-danger text-brand-danger-fg hover:opacity-90',
       },
       size: {
         default: 'h-10 px-4 py-2',

@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import { LoginForm } from '@/components/login-form'
 
 const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? 'OmniMetrics'
@@ -32,20 +33,40 @@ export default async function LoginPage({
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-brand-primary px-4">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-30"
-        style={{
-          background:
-            'radial-gradient(60rem 40rem at 50% -10%, var(--brand-accent), transparent 60%)',
-        }}
-      />
+      {/* Decorative background. Static, non-blocking (lazy, low fetch priority); the
+          navy page colour is already painted, so nothing shifts when it arrives. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <Image
+          src="/brand/login-bg.webp"
+          alt=""
+          fill
+          sizes="100vw"
+          fetchPriority="low"
+          unoptimized
+          className="object-cover opacity-25"
+        />
+        <div className="absolute inset-0 bg-brand-primary/75" />
+        <div
+          className="absolute inset-0 opacity-20"
+          style={{
+            background:
+              'radial-gradient(60rem 40rem at 50% -10%, var(--brand-accent), transparent 60%)',
+          }}
+        />
+      </div>
       <div className="relative w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="font-display text-4xl font-bold tracking-tight text-brand-text">
-            {BRAND_NAME}
-          </h1>
-          <p className="mt-2 text-sm text-brand-text-muted">Sign in to your account</p>
+          <h1 className="sr-only">Sign in to {BRAND_NAME}</h1>
+          <Image
+            src="/brand/logo-horizontal.png"
+            alt={BRAND_NAME}
+            width={1400}
+            height={617}
+            priority
+            sizes="(max-width: 384px) 100vw, 384px"
+            className="mx-auto h-auto w-full max-w-xs"
+          />
+          <p className="mt-4 text-sm text-brand-text-muted">Sign in to your account</p>
         </div>
         <LoginForm next={next} />
       </div>

@@ -1,26 +1,71 @@
 @import 'tailwindcss';
 
-/* White-label brand tokens. Rebrand = change these 8 variables + swap the logo. */
+/*
+ * White-label brand tokens (dark theme, the default).
+ * Rebrand = change the values in this block + swap the files in public/brand.
+ * Colours are sampled from public/brand/logo-horizontal.png and login-bg.webp
+ * (see docs/design/DIRECTION.md). Components must use the tokens, never hex.
+ */
 :root {
-  --brand-primary: #0f172a; /* Main background / nav */
-  --brand-accent: #3b82f6; /* CTAs, active states, chart highlights */
-  --brand-accent-fg: #ffffff; /* Text on accent colour */
-  --brand-surface: #1e293b; /* Card / panel background */
-  --brand-border: #334155; /* Borders and dividers */
-  --brand-text: #f1f5f9; /* Primary text */
-  --brand-text-muted: #94a3b8; /* Secondary / label text */
-  --brand-danger: #ef4444; /* Alert / overdue indicators */
+  /* Surfaces (navy, from the banner) */
+  --brand-primary: #0e182e; /* App background / nav */
+  --brand-surface: #15213b; /* Cards, panels */
+  --brand-surface-raised: #202e50; /* Popovers, hovered rows, table headers */
+
+  /* Lines */
+  --brand-border: #364970; /* Decorative dividers and card edges */
+  --brand-border-strong: #5f73a8; /* Form control edges (>= 3:1 on surfaces) */
+
+  /* Text */
+  --brand-text: #eef3fc; /* Primary text */
+  --brand-text-muted: #a1bfe3; /* Secondary / label text */
+
+  /* Accent (logo cyan) */
+  --brand-accent: #6edbf9; /* CTAs, focus ring, active states */
+  --brand-accent-fg: #0e182e; /* Text on accent */
+
+  /* Functional (not in the logo; kept AA on every surface) */
+  --brand-danger: #f87171;
+  --brand-danger-fg: #0e182e;
+
+  /* Chart series, in order of use (logo gradient). Max 5 series per chart. */
+  --chart-1: #6edbf9; /* cyan */
+  --chart-2: #a564e9; /* purple */
+  --chart-3: #4da2ed; /* blue */
+  --chart-4: #707ae1; /* indigo */
+  --chart-5: #b2d2fd; /* pale blue */
+
+  /* Shape */
+  --brand-radius: 0.375rem; /* 6px base; dense, not pill-shaped */
+
+  /* Browser UI colour (also exported from layout.tsx viewport) */
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-brand-primary: var(--brand-primary);
-  --color-brand-accent: var(--brand-accent);
-  --color-brand-accent-fg: var(--brand-accent-fg);
   --color-brand-surface: var(--brand-surface);
+  --color-brand-surface-raised: var(--brand-surface-raised);
   --color-brand-border: var(--brand-border);
+  --color-brand-border-strong: var(--brand-border-strong);
   --color-brand-text: var(--brand-text);
   --color-brand-text-muted: var(--brand-text-muted);
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-accent-fg: var(--brand-accent-fg);
   --color-brand-danger: var(--brand-danger);
+  --color-brand-danger-fg: var(--brand-danger-fg);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Radii derive from one token so rounded-sm/md/lg/xl follow the brand. */
+  --radius-sm: calc(var(--brand-radius) - 2px);
+  --radius-md: var(--brand-radius);
+  --radius-lg: calc(var(--brand-radius) + 2px);
+  --radius-xl: calc(var(--brand-radius) + 4px);
 
   --font-display: var(--font-syne), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
@@ -36,4 +81,9 @@ body {
   color: var(--brand-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers line up in tables, stat cards and axes. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
