@@ -41,4 +41,17 @@ Plan and Jay's answers: `docs/PLAN_PHASE2.md` (approved 2026-11-20). Domain ruli
   `packages/types/worldrisk.ts`, `apps/web/tests/filters.test.ts` (typecheck + 31 tests green).
 - Decisions to carry: scope on raw `folder_name`; `test sheets` stripped for every role; "All" = explicit folder list, never no-filter;
   non-admin grants are not narrowed by the dropdown universe, only by R1; default range now-6h, picker in Africa/Johannesburg.
-- Next: Step 3 (shared base query, summary route, `004_portal_reader_role.sql.example`). Wait for Jay's "approved".
+
+## Design passes (done)
+- Design pass 1 (v1): brand tokens, logo, favicon, login page (commit 4390ef5).
+- Design pass 2 (v2): Holographic HUD direction (`docs/design/DIRECTION.md`), `data-fx` effects levels (full|reduced|off), app shell (commit 2a544e7).
+- `apps/web/components/fx/` primitives: fx-core, fx-tokens, use-fx, fx-toggle, glass-panel, glow-input, gradient-text, holo-background, holo-canvas, motion-root, neon-button, page-transition, skeleton, stat-card.
+- `/dev/ui` (`apps/web/app/dev/ui`): primitives showcase page.
+- Topbar fix in `apps/web/components/shell/app-shell.tsx`.
+- `docs/DECISIONS.md`: R6 decisions log (D1 onward); all entries open until Jay rules.
+
+## Phase 4/5 list
+- Security headers: CSP, X-Frame-Options (and related) on the web app / Nginx.
+
+## Next
+- Step 3 (shared base query, summary route, `004_portal_reader_role.sql.example`). Wait for Jay's "approved".

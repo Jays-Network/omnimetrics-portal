@@ -32,7 +32,7 @@ visualization layer for the OmniMetrics logistics/fleet tracking platform operat
 |---|---|
 | Host | OmniMetrics LXC — Ubuntu 24.04, 5 cores, 10GB RAM, 200GB disk, 8GB swap |
 | Proxmox node | Cisco M5 ("WR") |
-| LXC IP | `192.168.3.32` |
+| LXC IP | `192.168.15.32` |
 | DDNS | `omnimetrics.dns.jays-network.com` |
 | Remote access | Twingate |
 | PostgreSQL | Port 5432, DB: `jaysnet_data`, users: `jaysnet_admin`, `grafana_reader` (Grafana only), `portal_reader` (portal dashboards, new) |

@@ -29,7 +29,7 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 
 ## Design rules
 - Any design skill must respect the brand CSS variables, the shadcn/ui + shadcn charts (Recharts) component stack, and the white-label theming in the brief.
-- This is an operations dashboard: favour dense, legible, consistent data presentation over decorative layouts or heavy animation. Motion is a Phase 5 concern.
+- The visual direction is Holographic HUD (docs/design/DIRECTION.md), driven by the `data-fx` effects level (`full|reduced|off`). Data legibility beats decoration; charts and tables sit on `data-glass` surfaces.
 - UI UX Pro Max (`.claude/skills/ui-ux-pro-max`) is advisory only; the brand variables and white-label theming win. Ignore its landing-page patterns (this is a logged-in operations dashboard; use the Data-Dense Dashboard style). Run it only via `python3 .claude/skills/ui-ux-pro-max/scripts/search.py`. Install no other skills or plugins without asking.
 
 ## Token hygiene
@@ -40,4 +40,4 @@ Full brief: docs/OmniMetrics_Portal_Architecture.md. Grafana dashboard JSONs in 
 - Keep plugins to a minimum.
 
 ## Domain context (binding)
-Read docs/CONTEXT.md before writing any SQL, project scoping or dashboard code. Its rulings (R1 to R5) are binding. If anything conflicts with it, stop and ask; do not choose silently.
+Read docs/CONTEXT.md before writing any SQL, project scoping or dashboard code. Its rulings (R1 to R6) are binding; docs/DECISIONS.md logs every change that alters a number (R6). If anything conflicts with it, stop and ask; do not choose silently.
