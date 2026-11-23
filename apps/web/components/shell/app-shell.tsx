@@ -64,12 +64,12 @@ export function AppShell({
     <div className={cn('relative', shell.outer)}>
       <HoloBackground variant="app" />
       <div className={cn('relative z-10 flex flex-col', shell.inner)}>
-        <header className="sticky top-0 z-20 p-3 pb-0">
+        <header className={cn('sticky top-0 z-20', shell.header)}>
           <GlassPanel tone={2} spotlight={false} sheen={false} halo={false}>
             {/* GlassPanel wraps children in a block (.fx-content), so the flex row lives here. */}
-            <div className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5">
+            <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 px-3', shell.row)}>
               <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
-                <Image src="/brand/emblem-1024.png" alt="" width={32} height={32} sizes="32px" className="size-8 shrink-0" />
+                <Image src="/brand/emblem-1024.png" alt="" width={32} height={32} sizes="32px" className={cn('shrink-0', shell.emblem)} />
                 <span className="hidden font-display text-base font-semibold lg:inline">{BRAND_NAME}</span>
               </Link>
 
@@ -87,7 +87,7 @@ export function AppShell({
                             href={tabHref(active.org.slug, tab)}
                             aria-current={on ? 'page' : undefined}
                             className={cn(
-                              'relative flex h-10 items-center gap-2 rounded-lg px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent',
+                              shell.tab, 'relative flex items-center gap-2 rounded-lg px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent',
                               on ? 'font-medium text-brand-text' : 'text-brand-text-muted hover:text-brand-text',
                             )}
                           >
@@ -110,7 +110,7 @@ export function AppShell({
               <div className="ml-auto flex shrink-0 items-center gap-3">
                 {mode === 'mock' ? (
                   <span
-                    title="Development mock data. Nothing shown here is real."
+                    title={editor ? 'Development mock data. Nothing shown here is real. The builder runs on mock data and nothing in it touches real tracking data.' : 'Development mock data. Nothing shown here is real.'}
                     className="rounded-full border border-[var(--chart-2)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--chart-2)]"
                   >
                     Mock data
@@ -131,7 +131,7 @@ export function AppShell({
             </div>
           </GlassPanel>
         </header>
-        <main className={cn('min-w-0 flex-1 p-3', shell.main)}>{children}</main>
+        <main className={cn('min-w-0 flex-1', shell.main)}>{children}</main>
       </div>
     </div>
   )

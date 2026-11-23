@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { capabilitiesFor, type OrgAccess, type Role } from '@omnimetrics/types'
 import {
   DashSpecSchema, addPanel, appendVersion, blockIssue, blocksToSpec, canAddBlock, changeChart, commit, emptyDash, insertBlock, newBlock, newHistory,
@@ -199,6 +199,19 @@ describe('edit capability per role (server side)', () => {
 })
 
 describe('SQL terminal (R7, mock)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('starts collapsed and remembers its state', async () => {
+    const first = render(<SqlTerminal orgName="WorldRisk" />)
+    const btn = () => screen.getByRole('button', { name: /sql terminal/i })
+    expect(btn()).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(btn())
+    expect(btn()).toHaveAttribute('aria-expanded', 'true')
+    first.unmount()
+    render(<SqlTerminal orgName="WorldRisk" />)
+    await waitFor(() => expect(btn()).toHaveAttribute('aria-expanded', 'true'))
+  })
+
   it('is visible to the director only', () => {
     expect(canSeeTerminal(director.capabilities)).toBe(true)
     for (const a of [orgAdmin, builder, viewer]) expect(canSeeTerminal(a.capabilities)).toBe(false)

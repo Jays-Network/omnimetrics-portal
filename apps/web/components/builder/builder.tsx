@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { ArrowLeft, Eye, EyeOff, LayoutGrid, Magnet, Redo2, Save, Settings, Undo2 } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, LayoutGrid, Magnet, MoreHorizontal, Redo2, Save, Settings, Undo2 } from 'lucide-react'
 import { GlassPanel } from '@/components/fx/glass-panel'
 import { addPanel, applyCommand, normalizeSpec, commit, dropPoint, newHistory, redo, removePanel, setPanelSpec, setRect, setZ, tidyUp, undo, ZOOMS, type Cmd, type DashSpec, type DashVersion, type History, type Rect, type Zoom } from '@/lib/builder/model'
 import { getPanelType } from '@/lib/panels/registry'
@@ -75,6 +75,14 @@ export function Builder({ orgSlug, nodeId, orgName, dashboardName: initialName, 
   const [varValues, setVarValues] = useState<Record<string, VarValue>>({})
   const [refreshSel, setRefreshSel] = useState<string | null>(null)
   const [range, setRange] = useState('Last 24 hours')
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!moreOpen) return
+    const away = (e: PointerEvent) => { if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false) }
+    document.addEventListener('pointerdown', away)
+    return () => document.removeEventListener('pointerdown', away)
+  }, [moreOpen])
   const [zoom, setZoom] = useState<Zoom>('fit')
   const [scale, setScale] = useState(1)
   const [guides, setGuides] = useState(false) // snapping is OFF by default
@@ -230,38 +238,44 @@ export function Builder({ orgSlug, nodeId, orgName, dashboardName: initialName, 
     <DndContext sensors={sensors} onDragStart={(e) => String(e.active.id).startsWith('asset:') && setDragType(String(e.active.id).slice(6).split('~')[0]!)} onDragCancel={() => setDragType(null)} onDragEnd={onDragEnd}>
       <div ref={rootRef} data-editor-root className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
         <div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* One toolbar row. Secondary canvas tools live in "More"; every control is kept. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <div className="flex min-w-0 items-center gap-2">
-              <button type="button" className={btn} onClick={goBack} title="Back to dashboard (Esc)"><ArrowLeft className="size-4" aria-hidden /> Back to dashboard</button>
-              <h1 className="min-w-0 truncate font-display text-lg font-semibold">Edit: {dashboardName} <span className="ml-1 text-xs font-normal text-brand-text-muted">v{latest?.n}{dirty ? ' · unsaved changes' : ''}</span></h1>
+              <button type="button" className={btn} onClick={goBack} title="Back to dashboard (Esc)"><ArrowLeft className="size-4" aria-hidden /> Back</button>
+              <h1 className="min-w-0 truncate font-display text-base font-semibold">Edit: {dashboardName} <span className="ml-1 text-xs font-normal text-brand-text-muted">v{latest?.n}{dirty ? ' · unsaved changes' : ''}</span></h1>
             </div>
-            <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label="Builder toolbar">
+            <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Builder toolbar">
+              <div role="group" aria-label="Zoom" className="flex items-center gap-1">
+                {ZOOMS.map((z) => (
+                  <button key={z} type="button" aria-pressed={zoom === z} onClick={() => setZoom(z)} className={cn(btn, 'px-2 py-1 text-xs', zoom === z && 'bg-brand-surface-raised font-semibold')}>{z === 'fit' ? 'Fit width' : `${z}%`}</button>
+                ))}
+                <span className="ml-1 text-xs tabular-nums text-brand-text-muted" aria-live="polite">{Math.round(scale * 100)}%</span>
+              </div>
               <button type="button" className={btn} onClick={doUndo} disabled={hist.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="size-4" aria-hidden /> Undo</button>
               <button type="button" className={btn} onClick={doRedo} disabled={hist.future.length === 0} title="Redo (Ctrl+Shift+Z)"><Redo2 className="size-4" aria-hidden /> Redo</button>
               <button type="button" className={btn} aria-pressed={preview} onClick={() => { setPreview((p) => !p); setSelectedId(null) }}>
                 {preview ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />} Preview
               </button>
               <button type="button" className={btn} aria-pressed={view === 'settings'} onClick={() => setView((v) => (v === 'settings' ? 'canvas' : 'settings'))} title="Dashboard settings"><Settings className="size-4" aria-hidden /> Settings</button>
+              <div className="relative" ref={moreRef}>
+                <button type="button" className={btn} aria-haspopup="true" aria-expanded={moreOpen} aria-controls="more-tools" onClick={() => setMoreOpen((o) => !o)}><MoreHorizontal className="size-4" aria-hidden /> More</button>
+                {moreOpen ? (
+                  <div id="more-tools" role="group" aria-label="Canvas tools" className="absolute right-0 top-full z-30 mt-1 w-72 space-y-2 rounded-lg border border-brand-border-strong bg-brand-surface p-3 shadow-xl" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setMoreOpen(false) } }}>
+                    <button type="button" className={cn(btn, 'w-full px-2 py-1 text-xs')} aria-pressed={guides} onClick={() => setGuides((g) => !g)} title="Smart alignment guides and snapping to other panels and the artboard edges. Hold Alt to flip it while dragging."><Magnet className="size-3.5" aria-hidden /> Snap to panels</button>
+                    <label className="flex items-center justify-between gap-2 text-xs">Grid snap
+                      <select value={grid ?? ''} onChange={(e) => setGrid(e.target.value === '' ? null : Number(e.target.value))} className="h-7 rounded-md border border-brand-border-strong bg-brand-primary px-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
+                        <option value="">Off</option><option value="8">8</option><option value="16">16</option><option value="24">24</option>
+                      </select>
+                    </label>
+                    <button type="button" className={cn(btn, 'w-full px-2 py-1 text-xs')} onClick={() => { change((d) => tidyUp(d)); setMoreOpen(false) }} disabled={dash.panels.length < 2} title="Arrange panels into rows that do not overlap"><LayoutGrid className="size-3.5" aria-hidden /> Tidy up</button>
+                    <p className="text-xs text-brand-text-muted">Shift locks one axis · Alt flips snapping</p>
+                  </div>
+                ) : null}
+              </div>
               <button type="button" className={cn(btn, 'bg-brand-accent text-brand-accent-fg hover:bg-brand-accent')} onClick={() => void save()} disabled={busy || !dirty}><Save className="size-4" aria-hidden /> Save version</button>
             </div>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2" role="toolbar" aria-label="Canvas tools">
-            <div role="group" aria-label="Zoom" className="flex items-center gap-1">
-              {ZOOMS.map((z) => (
-                <button key={z} type="button" aria-pressed={zoom === z} onClick={() => setZoom(z)} className={cn(btn, 'px-2 py-1 text-xs', zoom === z && 'bg-brand-surface-raised font-semibold')}>{z === 'fit' ? 'Fit width' : `${z}%`}</button>
-              ))}
-              <span className="ml-1 text-xs tabular-nums text-brand-text-muted" aria-live="polite">{Math.round(scale * 100)}%</span>
-            </div>
-            <button type="button" className={cn(btn, 'px-2 py-1 text-xs')} aria-pressed={guides} onClick={() => setGuides((g) => !g)} title="Smart alignment guides and snapping to other panels and the artboard edges. Hold Alt to flip it while dragging."><Magnet className="size-3.5" aria-hidden /> Snap to panels</button>
-            <label className="flex items-center gap-1 text-xs">Grid snap
-              <select value={grid ?? ''} onChange={(e) => setGrid(e.target.value === '' ? null : Number(e.target.value))} className="h-7 rounded-md border border-brand-border-strong bg-brand-primary px-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
-                <option value="">Off</option><option value="8">8</option><option value="16">16</option><option value="24">24</option>
-              </select>
-            </label>
-            <button type="button" className={cn(btn, 'px-2 py-1 text-xs')} onClick={() => change((d) => tidyUp(d))} disabled={dash.panels.length < 2} title="Arrange panels into rows that do not overlap"><LayoutGrid className="size-3.5" aria-hidden /> Tidy up</button>
-            <span className="text-xs text-brand-text-muted">Shift locks one axis · Alt flips snapping</span>
-          </div>
-          <p className={cn('mt-1 min-h-4 truncate text-xs', status?.error ? 'text-brand-danger' : 'text-brand-text-muted')} role={status?.error ? 'alert' : 'status'} aria-live="polite">{status?.text ?? 'Builder on mock data. Nothing here touches real tracking data.'}</p>
+          {status ? <p className={cn('mt-1 truncate text-xs', status.error ? 'text-brand-danger' : 'text-brand-text-muted')} role={status.error ? 'alert' : 'status'} aria-live="polite">{status.text}</p> : null}
         </div>
 
         {view === 'settings' ? (

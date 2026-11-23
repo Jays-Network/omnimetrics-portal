@@ -1,9 +1,11 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Play } from 'lucide-react'
 import { GlassPanel } from '@/components/fx/glass-panel'
 import { ROW_CAP, runMock, type RunOutcome } from '@/lib/builder/terminal'
+
+export const OPEN_KEY = 'omni.sqlTerminal.open'
 
 /**
  * Director-only SQL terminal (R7), MOCK. The parent renders this only when the server-derived
@@ -11,7 +13,10 @@ import { ROW_CAP, runMock, type RunOutcome } from '@/lib/builder/terminal'
  * lazy chunk they download. Nothing typed here is sent anywhere in M3.
  */
 export default function SqlTerminal({ orgName, capPx }: { orgName: string; /** Largest body height in px (the builder passes about 50% of the editor). */ capPx?: () => number }) {
+  // Collapsed by default; the choice is remembered per browser (preference only, read after mount so SSR matches).
   const [open, setOpen] = useState(false)
+  useEffect(() => { try { if (localStorage.getItem(OPEN_KEY) === '1') setOpen(true) } catch { /* storage blocked: stay collapsed */ } }, [])
+  const toggle = () => setOpen((o) => { try { localStorage.setItem(OPEN_KEY, o ? '0' : '1') } catch { /* ignore */ } return !o })
   const [height, setHeight] = useState(240)
   const drag = useRef<{ y: number; h: number } | null>(null)
   const cap = () => Math.max(120, capPx?.() ?? Math.floor((typeof window === 'undefined' ? 800 : window.innerHeight) * 0.5))
@@ -22,7 +27,7 @@ export default function SqlTerminal({ orgName, capPx }: { orgName: string; /** L
   return (
     <GlassPanel tone={2} spotlight={false} sheen={false} className="min-w-0 shrink-0 p-3" aria-label="SQL terminal">
       <div className="flex items-center justify-between gap-2">
-        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 rounded px-1 font-display text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
+        <button type="button" aria-expanded={open} onClick={toggle} className="flex items-center gap-2 rounded px-1 font-display text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
           {open ? <ChevronDown className="size-4" aria-hidden /> : <ChevronUp className="size-4" aria-hidden />}
           SQL terminal
         </button>

@@ -52,6 +52,26 @@ for (const vp of VIEWPORTS) {
         expect(Math.abs(frame.mainBottom - frame.innerH), '<main> bottom == viewport bottom').toBeLessThanOrEqual(TOL)
         expect(Math.abs(frame.rootBottom - (frame.mainBottom - frame.mainPadB)), 'editor root bottom == main content bottom').toBeLessThanOrEqual(TOL)
 
+        // 1b. Column heights. Terminal collapsed (the default): each side column >= 400px at 1366x768; open: >= 260px.
+        //     Only asserted at 1366x768 (the short-screen target); the other viewports just record them.
+        const colH = () => page.evaluate(() => ({
+          left: document.querySelector('[data-editor-col="assets"]')!.getBoundingClientRect().height,
+          right: document.querySelector('[data-editor-col="config"]')!.getBoundingClientRect().height,
+        }))
+        const termBtn = page.getByLabel('SQL terminal').getByRole('button', { name: /SQL terminal/ })
+        const short = vp.w === 1366 && vp.h === 768
+        expect(await termBtn.getAttribute('aria-expanded'), 'terminal starts collapsed').toBe('false')
+        const closedH = await colH()
+        Object.assign(m, { leftClosed: closedH.left, rightClosed: closedH.right })
+        if (short) { expect(closedH.left, 'left column, terminal collapsed').toBeGreaterThanOrEqual(400); expect(closedH.right, 'right column, terminal collapsed').toBeGreaterThanOrEqual(400) }
+        await termBtn.click()
+        const openH = await colH()
+        Object.assign(m, { leftOpen: openH.left, rightOpen: openH.right })
+        if (short) { expect(openH.left, 'left column, terminal open').toBeGreaterThanOrEqual(260); expect(openH.right, 'right column, terminal open').toBeGreaterThanOrEqual(260) }
+        // The choice is remembered across a reload.
+        await page.reload(); await page.waitForSelector('[data-panel-id]')
+        expect(await termBtn.getAttribute('aria-expanded'), 'terminal state remembered').toBe('true')
+
         // 2. Terminal dock: fully visible when open.
         const term = page.getByLabel('SQL terminal')
         await expect(term).toBeVisible()

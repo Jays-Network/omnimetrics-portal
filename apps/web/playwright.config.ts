@@ -6,7 +6,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 120_000,
   workers: 1,
-  retries: 1, // the dev server compiles on first hit and occasionally answers 500 once while it does
+  retries: 0, // M3.4: a 500 must fail loudly, never be retried away
   reporter: [['list']],
   outputDir: './test-results',
   use: { baseURL: process.env.LAYOUT_BASE_URL ?? 'http://localhost:3002', browserName: 'chromium' },
