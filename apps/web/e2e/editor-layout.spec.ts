@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 // Fixed-viewport editor layout, measured in a real browser (jsdom has no layout engine).
@@ -10,7 +11,8 @@ const VIEWPORTS = [
   { w: 1024, h: 768 },
 ]
 const SCALES = [0.5, 1, 1.5]
-const SHOTS = path.join(__dirname, 'screenshots')
+// Outside the project on purpose: files written under apps/web make the Next dev watcher recompile mid-test, which answers 500 once.
+const SHOTS = process.env.LAYOUT_OUT ? path.join(process.env.LAYOUT_OUT, 'screenshots') : path.join(os.tmpdir(), 'omni-e2e', 'screenshots')
 const TOL = 1 // sub-pixel rounding
 
 async function open(page: Page) {

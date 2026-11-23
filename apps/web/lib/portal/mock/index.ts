@@ -9,11 +9,13 @@ import { grantsFor } from './dashboard'
 import { canEditDashboard } from '@/lib/builder/settings'
 import { normalizeSpec, type DashVersion } from '@/lib/builder/model'
 
+import * as admin from './admin'
+
 // MOCK DATA: development only (see ../index.ts). Obviously fake, deterministic.
-const ORGS: OrgSummary[] = [
-  { id: 'mock-org-worldrisk', slug: 'worldrisk', name: 'WorldRisk', status: 'active', memberCount: 6, integrationCount: 1, dashboardCount: 8 },
-  { id: 'mock-org-adars', slug: 'adars', name: 'ADARS', status: 'active', memberCount: 4, integrationCount: 1, dashboardCount: 3 },
-]
+const orgSummaries = (): OrgSummary[] => admin.listOrgs().map((o) => {
+  const p = admin.organisations.list({ org: o, role: 'admin', isPlatform: true, capabilities: capabilitiesFor('admin', true) })
+  return p.ok ? p.orgs.find((x) => x.id === o.id)! : { id: o.id, slug: o.slug, name: o.name, status: o.status, memberCount: 0, integrationCount: 0, dashboardCount: 0 }
+})
 
 /**
  * Mock memberships are keyed to the REAL signed-in user (auth is never
@@ -22,14 +24,15 @@ const ORGS: OrgSummary[] = [
  */
 function accessFor(who: PortalIdentity): OrgAccess[] {
   if (who.role === 'admin') {
-    return ORGS.map((o) => ({
+    return orgSummaries().map((o) => ({
       org: { id: o.id, slug: o.slug, name: o.name, status: o.status },
       role: 'admin',
       isPlatform: true,
       capabilities: capabilitiesFor('admin', true),
     }))
   }
-  const wr = ORGS[0]!
+  const wr = orgSummaries()[0]!
+  if (wr.status === 'suspended') return [] // a suspended organisation is closed to everyone but the director
   return [
     {
       org: { id: wr.id, slug: wr.slug, name: wr.name, status: wr.status },
@@ -62,9 +65,16 @@ export const mockPortal: Portal = {
       return accessFor(who)
     },
     async listAll() {
-      return ORGS.map((o) => ({ ...o }))
+      return orgSummaries()
     },
-  },  content: {
+  },
+  integrations: admin.integrations,
+  organisations: admin.organisations,
+  users: admin.users,
+  accounts: admin.accounts,
+  account: admin.account,
+  settings: admin.settings,
+  content: {
     async tree(ctx) {
       requireView(ctx)
       return toClient(mockStore(ctx))

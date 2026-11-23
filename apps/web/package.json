@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:layout": "playwright test e2e/editor-layout.spec.ts"
+    "test:layout": "playwright test e2e/editor-layout.spec.ts e2e/pages-layout.spec.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

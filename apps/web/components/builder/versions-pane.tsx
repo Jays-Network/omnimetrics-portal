@@ -1,9 +1,11 @@
 'use client'
 
 import type { DashVersion } from '@/lib/builder/model'
+import { useFormat } from '@/components/fx/format-context'
 
 /** Version history, newest first, with Restore. Append-only: restoring adds a new version. Used in the editor panel and in Settings. */
 export function VersionsPane({ versions, note, onNote, busy, onRestore }: { versions: DashVersion[]; note: string; onNote: (s: string) => void; busy: boolean; onRestore: (n: number) => void }) {
+  const fmt = useFormat()
   return (
     <div className="space-y-2">
       <label className="block text-xs">Note for the next version
@@ -15,7 +17,7 @@ export function VersionsPane({ versions, note, onNote, busy, onRestore }: { vers
             <span className="min-w-0">
               <span className="font-semibold">v{v.n}</span>{i === 0 ? <span className="ml-1 text-brand-accent">current</span> : null}
               <span className="block break-words text-brand-text-muted">{v.note}</span>
-              <span className="block text-brand-text-muted">{v.author} · {new Date(v.createdAt).toLocaleString('en-ZA')}</span>
+              <span className="block text-brand-text-muted">{v.author} · {fmt.dateTime(v.createdAt)}</span>
             </span>
             {i === 0 ? null : <button type="button" disabled={busy} onClick={() => onRestore(v.n)} className="shrink-0 rounded border border-brand-border-strong px-2 py-1 hover:bg-brand-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-50">Restore</button>}
           </li>

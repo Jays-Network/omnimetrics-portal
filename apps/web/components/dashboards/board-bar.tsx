@@ -1,5 +1,7 @@
 'use client'
 
+import { useFormat } from '@/components/fx/format-context'
+import { createFormatter } from '@/lib/settings/format'
 import Link from 'next/link'
 import { ExternalLink, RefreshCw } from 'lucide-react'
 import { resolveTimezone, resolveVariable, WEEK_START_LABEL, type DashSettings, type VarValue, type Variable } from '@/lib/builder/settings'
@@ -56,9 +58,10 @@ export function BoardBar({ settings, values, onValue, systemTz, orgTz, tick, las
   range?: string
   onRange?: (s: string) => void
 }) {
+  const fmt = useFormat()
   const tz = resolveTimezone(settings.time.timezone, orgTz, systemTz)
   const week = settings.time.weekStart === 'default' ? 'monday' : settings.time.weekStart
-  const stamp = new Intl.DateTimeFormat('en-ZA', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(last)
+  const stamp = createFormatter({ ...fmt.settings, timeZone: tz as typeof fmt.settings.timeZone }).time(last) // the dashboard's own display zone; 12/24h from the viewer; display zone and 12/24h follow the viewer's preferences (R6: display only)
   return (
     <div role="region" aria-label="Dashboard controls" className="mb-2 space-y-1.5 text-sm" data-tick={tick}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">

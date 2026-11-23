@@ -10,7 +10,7 @@ import { GlassPanel } from '@/components/fx/glass-panel'
 import { HoloBackground } from '@/components/fx/holo-background'
 import { LogoutButton } from '@/components/logout-button'
 import { cn } from '@/lib/utils'
-import { isEditorPath, shellClasses } from './editor-shell'
+import { isEditorPath, isFixedPath, shellClasses } from './editor-shell'
 import { NAV_TABS, activeTabKey, tabHref } from './nav'
 import { LAST_ORG_COOKIE, pickDefaultOrg } from '@/lib/portal/org-pref'
 import type { PreviewRole } from '@/lib/portal/preview'
@@ -51,7 +51,7 @@ export function AppShell({
   const activeKey = activeTabKey(pathname)
   // The builder is a fixed-viewport editor: the page itself never scrolls, its columns do.
   const editor = isEditorPath(pathname)
-  const shell = shellClasses(editor)
+  const shell = shellClasses(isFixedPath(pathname))
   const tabs = active ? NAV_TABS.filter((t) => active.capabilities.includes(t.cap)) : []
   const viewedSlug = orgs.find((o) => o.org.slug === params.orgSlug)?.org.slug
   useEffect(() => {

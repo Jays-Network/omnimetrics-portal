@@ -22,6 +22,8 @@ export type Capability =
   | 'settings.view'
   | 'settings.org'
   | 'orgs.manage'
+  | 'hosts.manage'
+  | 'settings.system'
   | 'terminal.run'
 
 const ORG_ADMIN: readonly Capability[] = [
@@ -38,7 +40,7 @@ const VIEWER: readonly Capability[] = ['dashboards.view', 'settings.view']
 
 /** Pure role to capability map. Platform admin = every org capability plus orgs.manage and terminal.run. */
 export function capabilitiesFor(role: Role, isPlatform: boolean): Capability[] {
-  if (isPlatform) return [...ORG_ADMIN, 'orgs.manage', 'terminal.run']
+  if (isPlatform) return [...ORG_ADMIN, 'orgs.manage', 'hosts.manage', 'settings.system', 'terminal.run']
   if (role === 'admin') return [...ORG_ADMIN]
   if (role === 'builder') return [...BUILDER]
   return [...VIEWER]

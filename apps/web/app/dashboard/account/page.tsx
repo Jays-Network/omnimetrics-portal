@@ -1,21 +1,12 @@
-import { GlassPanel } from '@/components/fx/glass-panel'
-import { PageTitle, PlannedCard } from '@/components/shell/page-intro'
+import { AccountView } from '@/components/admin/account-view'
+import { FormatProvider } from '@/components/fx/format-context'
+import { pickDefaultOrg } from '@/lib/portal/org-pref'
 import { requirePortalUser } from '@/lib/portal/org'
 
 export default async function MyAccountPage() {
-  const { user } = await requirePortalUser()
-  return (
-    <>
-      <PageTitle title="My account" description="Your own login details." />
-      <GlassPanel tone="data" className="mb-3 max-w-md p-5">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-          <dt className="text-brand-text-muted">Username</dt>
-          <dd className="font-medium">{user.username}</dd>
-          <dt className="text-brand-text-muted">Email</dt>
-          <dd className="font-medium">{user.email}</dd>
-        </dl>
-      </GlassPanel>
-      <PlannedCard milestone="M4" heading="Login security" items={['Change password and review your sessions.', 'Personal overrides of the system settings.']} />
-    </>
-  )
+  const { user, accessible, portal } = await requirePortalUser()
+  const org = pickDefaultOrg(accessible, null)
+  const s = org ? portal.settings.get(org, { id: user.id, username: user.username }) : null
+  const page = <AccountView username={user.username} email={user.email} isDirector={accessible.some((a) => a.isPlatform)} />
+  return s?.ok ? <FormatProvider settings={s.view.effective.value}>{page}</FormatProvider> : page
 }

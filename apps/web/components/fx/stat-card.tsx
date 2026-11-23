@@ -4,9 +4,12 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { GlassPanel } from './glass-panel'
+import { activeFormatter } from './format-context'
 import { useFxLevel } from './use-fx'
 
 export function formatStat(value: number, decimals = 0): string {
+  const f = activeFormatter() // viewer's preferred number format when a FormatProvider is mounted
+  if (f) return f.number(value, decimals)
   return new Intl.NumberFormat('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

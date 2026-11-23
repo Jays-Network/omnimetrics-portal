@@ -22,11 +22,15 @@ describe('real editor route keeps the fill chain', () => {
   it('no layout or template between /dashboard and the edit page can break the chain', () => {
     const dirs = ['app/dashboard', 'app/dashboard/o', 'app/dashboard/o/[orgSlug]', 'app/dashboard/o/[orgSlug]/d', 'app/dashboard/o/[orgSlug]/d/[nodeId]', 'app/dashboard/o/[orgSlug]/d/[nodeId]/edit']
     const files = dirs.flatMap((d) => ['layout.tsx', 'template.tsx'].map((f) => `${d}/${f}`)).filter((f) => fs.existsSync(path.join(ROOT, f)))
-    expect(files).toEqual(['app/dashboard/layout.tsx', 'app/dashboard/template.tsx']) // a new wrapper here must be reviewed, then listed
+    expect(files).toEqual(['app/dashboard/layout.tsx', 'app/dashboard/template.tsx', 'app/dashboard/o/[orgSlug]/layout.tsx']) // a new wrapper here must be reviewed, then listed
     expect(src('app/dashboard/layout.tsx')).toMatch(/<MotionRoot>[\s\S]*<AppShell[\s\S]*\{children\}[\s\S]*<\/AppShell>/)
     expect(src('app/dashboard/layout.tsx')).not.toMatch(/className=/) // the layout adds no wrapper element of its own
     expect(src('app/dashboard/template.tsx')).toMatch(/<PageTransition>\{children\}<\/PageTransition>/)
     expect(src('app/dashboard/template.tsx')).not.toMatch(/className=/)
+    // The org layout only provides settings context: no element of its own, so no height can be lost.
+    const org = src('app/dashboard/o/[orgSlug]/layout.tsx')
+    expect(org).toMatch(/<FormatProvider[^>]*>\{children\}<\/FormatProvider>/)
+    expect(org).not.toMatch(/className=|<div|<main|<section/)
   })
 
   it('PageTransition passes the fill classes through at every effects level', () => {

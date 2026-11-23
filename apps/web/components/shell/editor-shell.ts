@@ -3,6 +3,13 @@
 
 export const isEditorPath = (pathname: string): boolean => /\/d\/[^/]+\/edit\/?$/.test(pathname) || pathname === '/dev/editor'
 
+/**
+ * Fixed-viewport pages: the editor plus the M4 sections (Integrations, Admin, Settings, My account, platform).
+ * The page never scrolls; panes inside it do.
+ */
+export const isFixedPath = (pathname: string): boolean =>
+  isEditorPath(pathname) || pathname.startsWith('/dev/pages/') || /^\/dashboard\/o\/[^/]+\/(integrations|admin|settings)(\/|$)/.test(pathname) || /^\/dashboard\/(account|platform)(\/|$)/.test(pathname)
+
 export const shellClasses = (editor: boolean) => ({
   outer: editor ? 'h-dvh overflow-hidden' : 'min-h-screen',
   inner: editor ? 'h-dvh' : 'min-h-screen',

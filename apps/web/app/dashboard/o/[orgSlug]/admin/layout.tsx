@@ -3,7 +3,7 @@ import { SubTabs } from '@/components/shell/sub-tabs'
 import { orgBase } from '@/components/shell/nav'
 import { requireOrgPage } from '@/lib/portal/org'
 
-// Sub-tabs only; each admin page still calls requireOrgPage itself.
+// Sub-tabs only; each admin page still calls requireOrgPage itself. Fixed-height column: tabs on top, the page fills the rest.
 export default async function AdminLayout({ children, params }: { children: ReactNode; params: Promise<{ orgSlug: string }> }) {
   const { orgSlug } = await params
   const { access } = await requireOrgPage(orgSlug, 'admin.view')
@@ -16,9 +16,9 @@ export default async function AdminLayout({ children, params }: { children: Reac
     { label: 'Accounts', href: `${base}/admin/accounts` },
   ]
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <SubTabs tabs={tabs} label="Admin" />
-      {children}
-    </>
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
   )
 }

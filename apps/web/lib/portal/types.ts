@@ -1,5 +1,6 @@
 import type { DashVersion } from '@/lib/builder/model'
 import type { SaveInput, SaveResult } from './mock/versions'
+import type * as A from './mock/admin'
 import type { GrantRow, ContentNode, ContentOp, ContentResult, DashboardView, Org, OrgAccess, Role } from '@omnimetrics/types'
 
 /** Who is asking. Comes from the verified session (getCurrentUser), never from the browser. */
@@ -39,6 +40,13 @@ export interface Portal {
     /** One tree mutation; permission, depth and name rules are enforced here, not in the UI. */
     apply(ctx: OrgCtx, op: ContentOp): Promise<ContentResult>
   }
+  /** M4 admin surface (mock). Typed from the mock module until the pg implementation arrives in M5. */
+  integrations: typeof A.integrations
+  organisations: typeof A.organisations
+  users: typeof A.users
+  accounts: typeof A.accounts
+  account: typeof A.account
+  settings: typeof A.settings
   dashboards: {
     /** A dashboard of this organisation, or null (also for ids of other organisations). */
     get(ctx: OrgCtx, nodeId: string): Promise<DashboardView | null>

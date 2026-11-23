@@ -1,21 +1,12 @@
-import { PageTitle, PlannedCard } from '@/components/shell/page-intro'
+import { notFound } from 'next/navigation'
+import { SystemSettingsView } from '@/components/admin/system-settings-view'
 import { requireOrgPage } from '@/lib/portal/org'
 
+// Everyone sees Settings (their own preferences); organisation and system scopes appear only with the capability, and the portal re-checks on save.
 export default async function SettingsPage({ params }: { params: Promise<{ orgSlug: string }> }) {
   const { orgSlug } = await params
-  await requireOrgPage(orgSlug, 'settings.view')
-  return (
-    <>
-      <PageTitle title="Settings" description="Date format, time format, time zone, region and language." />
-      <PlannedCard
-        milestone="M4"
-        heading="System settings"
-        items={[
-          'Order of precedence: your override, then the organisation default, then the system default.',
-          'Time zone changes display only; counting stays on Africa/Johannesburg.',
-          'English only for now; the structure stays ready for more languages.',
-        ]}
-      />
-    </>
-  )
+  const { access, portal, user } = await requireOrgPage(orgSlug, 'settings.view')
+  const r = portal.settings.get(access, { id: user.id, username: user.username })
+  if (!r.ok) notFound()
+  return <SystemSettingsView orgSlug={access.org.slug} orgName={access.org.name} initial={r.view} />
 }
