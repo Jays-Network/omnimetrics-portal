@@ -16,6 +16,7 @@ export interface Org {
 export type Capability =
   | 'dashboards.view'
   | 'dashboards.edit'
+  | 'dashboards.delete'
   | 'integrations.manage'
   | 'admin.view'
   | 'settings.view'
@@ -26,12 +27,13 @@ export type Capability =
 const ORG_ADMIN: readonly Capability[] = [
   'dashboards.view',
   'dashboards.edit',
+  'dashboards.delete',
   'integrations.manage',
   'admin.view',
   'settings.view',
   'settings.org',
 ]
-const BUILDER: readonly Capability[] = ['dashboards.view', 'dashboards.edit', 'settings.view']
+const BUILDER: readonly Capability[] = ['dashboards.view', 'dashboards.edit', 'dashboards.delete', 'settings.view']
 const VIEWER: readonly Capability[] = ['dashboards.view', 'settings.view']
 
 /** Pure role to capability map. Platform admin = every org capability plus orgs.manage and terminal.run. */

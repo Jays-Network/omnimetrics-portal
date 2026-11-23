@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useParams, usePathname } from 'next/navigation'
@@ -10,8 +10,12 @@ import { GlassPanel } from '@/components/fx/glass-panel'
 import { HoloBackground } from '@/components/fx/holo-background'
 import { LogoutButton } from '@/components/logout-button'
 import { cn } from '@/lib/utils'
+import { isEditorPath, shellClasses } from './editor-shell'
 import { NAV_TABS, activeTabKey, tabHref } from './nav'
+import { LAST_ORG_COOKIE, pickDefaultOrg } from '@/lib/portal/org-pref'
+import type { PreviewRole } from '@/lib/portal/preview'
 import { OrgSwitcher } from './org-switcher'
+import { RolePreview } from './role-preview'
 
 const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? 'OmniMetrics'
 
@@ -28,24 +32,38 @@ export function AppShell({
   user,
   orgs,
   mode,
+  lastOrgSlug,
+  preview,
   children,
 }: {
   user: ShellUser
   orgs: OrgAccess[]
   mode: 'mock' | 'pg'
+  /** Remembered organisation (UI preference only, never authorization). */
+  lastOrgSlug?: string | null
+  /** Dev-only role preview state; present in mock mode. */
+  preview?: { current: PreviewRole | null; options: PreviewRole[] }
   children: ReactNode
 }) {
   const pathname = usePathname()
   const params = useParams<{ orgSlug?: string }>()
-  const active = orgs.find((o) => o.org.slug === params.orgSlug) ?? orgs[0]
+  const active = orgs.find((o) => o.org.slug === params.orgSlug) ?? pickDefaultOrg(orgs, lastOrgSlug)
   const activeKey = activeTabKey(pathname)
+  // The builder is a fixed-viewport editor: the page itself never scrolls, its columns do.
+  const editor = isEditorPath(pathname)
+  const shell = shellClasses(editor)
   const tabs = active ? NAV_TABS.filter((t) => active.capabilities.includes(t.cap)) : []
+  const viewedSlug = orgs.find((o) => o.org.slug === params.orgSlug)?.org.slug
+  useEffect(() => {
+    // Remember the last organisation. Preference only: read back solely to choose a default among orgs the server already verified.
+    if (viewedSlug) document.cookie = `${LAST_ORG_COOKIE}=${encodeURIComponent(viewedSlug)}; path=/; max-age=31536000; samesite=lax`
+  }, [viewedSlug])
   const roleLabel = active ? (active.isPlatform ? 'Director' : active.role) : ''
 
   return (
-    <div className="relative min-h-screen">
+    <div className={cn('relative', shell.outer)}>
       <HoloBackground variant="app" />
-      <div className="relative z-10 flex min-h-screen flex-col">
+      <div className={cn('relative z-10 flex flex-col', shell.inner)}>
         <header className="sticky top-0 z-20 p-3 pb-0">
           <GlassPanel tone={2} spotlight={false} sheen={false} halo={false}>
             {/* GlassPanel wraps children in a block (.fx-content), so the flex row lives here. */}
@@ -98,6 +116,7 @@ export function AppShell({
                     Mock data
                   </span>
                 ) : null}
+                {mode === 'mock' && preview ? <RolePreview current={preview.current} options={preview.options} /> : null}
                 <FxToggle />
                 <Link
                   href="/dashboard/account"
@@ -112,7 +131,7 @@ export function AppShell({
             </div>
           </GlassPanel>
         </header>
-        <main className="min-w-0 flex-1 p-3">{children}</main>
+        <main className={cn('min-w-0 flex-1 p-3', shell.main)}>{children}</main>
       </div>
     </div>
   )

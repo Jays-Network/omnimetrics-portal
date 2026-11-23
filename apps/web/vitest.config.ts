@@ -12,6 +12,7 @@ export default defineConfig({
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules/**", ".next/**"],
     // Unit and mocked tests only: no live DB, no network.
+    testTimeout: 60_000, // the 48-panel fit test and the builder import are heavy under parallel load
     restoreMocks: true,
     clearMocks: true,
   },

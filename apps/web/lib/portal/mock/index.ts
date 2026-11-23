@@ -1,5 +1,13 @@
 import { capabilitiesFor, type OrgAccess } from '@omnimetrics/types'
-import type { Portal, PortalIdentity, OrgSummary } from '../types'
+import type { Portal, PortalIdentity, OrgSummary, OrgCtx } from '../types'
+import { applyOp, pathOf, toClient, type StoredNode } from '../tree'
+import { mockStore, setMockStore } from './content'
+import { buildDashboardView } from './dashboard'
+import { mockVersions, saveMockVersion } from './versions'
+import { canManageGrants, storeGrants, storedGrants } from './grants'
+import { grantsFor } from './dashboard'
+import { canEditDashboard } from '@/lib/builder/settings'
+import { normalizeSpec, type DashVersion } from '@/lib/builder/model'
 
 // MOCK DATA: development only (see ../index.ts). Obviously fake, deterministic.
 const ORGS: OrgSummary[] = [
@@ -32,6 +40,21 @@ function accessFor(who: PortalIdentity): OrgAccess[] {
   ]
 }
 
+function requireEdit(ctx: OrgCtx) {
+  if (!ctx.capabilities.includes('dashboards.edit')) throw new Error('forbidden')
+}
+
+/** A read-only dashboard refuses builders even if they call the API directly; admins and the director can still change it. */
+function requireEditable(ctx: OrgCtx, list: DashVersion[]) {
+  if (!canEditDashboard(ctx, normalizeSpec(list[list.length - 1]!.spec).settings)) throw new Error('forbidden')
+}
+
+const isDashboard = (ctx: OrgCtx, nodeId: string) => toClient(mockStore(ctx)).some((n) => n.id === nodeId && n.kind === 'dashboard')
+
+function requireView(ctx: OrgCtx) {
+  if (!ctx.capabilities.includes('dashboards.view')) throw new Error('forbidden')
+}
+
 export const mockPortal: Portal = {
   mode: 'mock',
   orgs: {
@@ -40,6 +63,53 @@ export const mockPortal: Portal = {
     },
     async listAll() {
       return ORGS.map((o) => ({ ...o }))
+    },
+  },  content: {
+    async tree(ctx) {
+      requireView(ctx)
+      return toClient(mockStore(ctx))
+    },
+    async apply(ctx, op) {
+      requireView(ctx)
+      const out: { stored?: StoredNode[] } = {}
+      const result = applyOp(mockStore(ctx), ctx, op, out)
+      if (result.ok && out.stored) setMockStore(ctx, out.stored)
+      return result
+    },
+  },
+  dashboards: {
+    async get(ctx, nodeId) {
+      requireView(ctx)
+      const nodes = toClient(mockStore(ctx))
+      const node = nodes.find((n) => n.id === nodeId)
+      if (!node || node.kind !== 'dashboard') return null
+      const versions = mockVersions(ctx, nodeId)
+      return buildDashboardView(ctx, node, pathOf(nodes, nodeId), versions[versions.length - 1]!.spec)
+    },
+    async versions(ctx, nodeId) {
+      requireEdit(ctx)
+      if (!isDashboard(ctx, nodeId)) return null
+      const list = mockVersions(ctx, nodeId)
+      requireEditable(ctx, list)
+      return list
+    },
+    async grants(ctx, nodeId) {
+      requireEdit(ctx)
+      const node = toClient(mockStore(ctx)).find((n) => n.id === nodeId && n.kind === 'dashboard')
+      return node ? (storedGrants(ctx, nodeId) ?? grantsFor(node, ctx.org.name)) : null
+    },
+    async setGrants(ctx, nodeId, rows) {
+      requireEdit(ctx)
+      if (!canManageGrants(ctx)) return { ok: false, code: 'forbidden', error: 'Only an organisation admin changes who has access.' }
+      if (!isDashboard(ctx, nodeId)) return { ok: false, code: 'not_found', error: 'Not found' }
+      storeGrants(ctx, nodeId, rows)
+      return { ok: true, grants: rows }
+    },
+    async saveVersion(ctx, nodeId, input, author) {
+      requireEdit(ctx)
+      if (!isDashboard(ctx, nodeId)) return { ok: false, code: 'not_found', error: 'Not found' }
+      requireEditable(ctx, mockVersions(ctx, nodeId))
+      return saveMockVersion(ctx, nodeId, input, author)
     },
   },
 }

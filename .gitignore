@@ -11,3 +11,6 @@ db/migrations/003_portal_app_role.sql
 __pycache__/
 *.pyc
 grafana-export/
+apps/web/e2e/screenshots/
+apps/web/test-results/
+apps/web/playwright-report/

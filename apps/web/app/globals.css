@@ -633,30 +633,25 @@ html[data-hidden] *::after {
   }
 
   /* ---- Shell ---- */
-  .fx-nav-indicator {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: var(--nav-item-h);
-    border-radius: var(--radius-lg);
-    background: linear-gradient(90deg, var(--glow-1-soft), transparent 80%);
-    transition: transform var(--d-slow) var(--fx-ease-spring);
-    pointer-events: none;
-  }
-  .fx-nav-indicator::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 18%;
-    bottom: 18%;
-    width: 3px;
-    border-radius: 9999px;
-    background: var(--glow-1);
-    box-shadow: 0 0 12px 1px var(--glow-1-strong);
-  }
   .fx-live-dot {
     animation: fx-blink 2.4s ease-in-out infinite;
     animation-play-state: var(--fx-play);
   }
 }
+
+/* GlassPanel's inner wrapper is a plain block. `fx-fill` makes it pass a definite height to its children,
+   so h-full / min-h-0 / flex-1 chains (panels in grid cells, editor columns) resolve instead of collapsing to 0. */
+.fx-glass.fx-fill { min-height: 0; }
+.fx-glass.fx-fill > .fx-content { height: 100%; min-height: 0; }
+
+/* Scroll containers in the editor columns: contained (no scroll chaining to the page) with a visible,
+   token-coloured thin scrollbar so users can see that a column scrolls. */
+.scroll-token {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--brand-border-strong) transparent;
+}
+.scroll-token::-webkit-scrollbar { width: 10px; height: 10px; }
+.scroll-token::-webkit-scrollbar-track { background: transparent; }
+.scroll-token::-webkit-scrollbar-thumb { background: var(--brand-border-strong); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+.scroll-token::-webkit-scrollbar-thumb:hover { background: var(--brand-accent); background-clip: content-box; }

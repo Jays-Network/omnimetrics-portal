@@ -1,14 +1,20 @@
 import { cache } from 'react'
+import { cookies } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
 import type { Capability, OrgAccess, Role, User } from '@omnimetrics/types'
 import { getCurrentUser } from '@/lib/auth'
 import { getPortal, type Portal } from './index'
+import { PREVIEW_COOKIE, parsePreview, reduceAccess, type PreviewRole } from './preview'
 
 export interface PortalPageContext {
   user: User
   portal: Portal
-  /** Every organisation this user may enter. */
+  /** Every organisation this user may enter (already reduced by a dev preview, if any). */
   accessible: OrgAccess[]
+  /** Unreduced access, only used to offer the dev "preview as role" options. */
+  real: OrgAccess[]
+  /** Active dev preview role (mock mode only). */
+  preview: PreviewRole | null
 }
 
 const accessibleFor = cache(async (id: string, username: string, role: Role) => {
@@ -16,12 +22,22 @@ const accessibleFor = cache(async (id: string, username: string, role: Role) => 
   return { portal, accessible: await portal.orgs.listAccessible({ id, username, role }) }
 })
 
+/**
+ * Verified session -> accessible organisations. Applies the dev-only role
+ * preview, which can only REDUCE access and exists only with the mock portal.
+ * Shared by pages (requirePortalUser) and route handlers.
+ */
+export async function resolveAccess(user: User): Promise<Omit<PortalPageContext, 'user'>> {
+  const { portal, accessible: real } = await accessibleFor(user.id, user.username, user.role)
+  const preview = portal.mode === 'mock' ? parsePreview((await cookies()).get(PREVIEW_COOKIE)?.value) : null
+  return { portal, real, preview, accessible: preview ? real.map((a) => reduceAccess(a, preview)) : real }
+}
+
 /** Signed-in user plus their organisations. Redirects to /login when unauthenticated. */
 export async function requirePortalUser(): Promise<PortalPageContext> {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  const { portal, accessible } = await accessibleFor(user.id, user.username, user.role)
-  return { user, portal, accessible }
+  return { user, ...(await resolveAccess(user)) }
 }
 
 /**

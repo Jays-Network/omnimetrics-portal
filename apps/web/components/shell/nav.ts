@@ -28,12 +28,16 @@ export const tabHref = (slug: string, tab: NavTab) => `${orgBase(slug)}/${tab.se
 export function activeTabKey(pathname: string): TabKey | null {
   if (pathname.startsWith('/dashboard/platform')) return 'admin'
   const m = /^\/dashboard\/o\/[^/]+\/([^/]+)/.exec(pathname)
-  return NAV_TABS.find((t) => t.segment === m?.[1])?.key ?? null
+  // `d/[nodeId]` (dashboard viewer) belongs to the Dashboards tab.
+  const seg = m?.[1] === 'd' ? 'dashboards' : m?.[1]
+  return NAV_TABS.find((t) => t.segment === seg)?.key ?? null
 }
 
 /** Swap the organisation in the current path, keeping the section; fall back to its Dashboards tab. */
 export function switchOrgHref(pathname: string, fromSlug: string, toSlug: string): string {
   const prefix = orgBase(fromSlug)
+  // Node ids belong to one organisation, so a viewer URL never carries over.
+  if (pathname.startsWith(`${prefix}/d/`)) return `${orgBase(toSlug)}/dashboards`
   if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
     return `${orgBase(toSlug)}${pathname.slice(prefix.length)}`
   }

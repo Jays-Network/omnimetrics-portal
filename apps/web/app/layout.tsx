@@ -35,7 +35,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Sets <html data-fx> before first paint (no flash). See components/fx/fx-core.ts. */}
         <script dangerouslySetInnerHTML={{ __html: FX_BOOT_SCRIPT }} />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>
