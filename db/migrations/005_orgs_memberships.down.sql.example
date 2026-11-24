@@ -1,0 +1,26 @@
+-- 005_orgs_memberships.down.sql.example
+-- Rollback of 005. RUN AS: jaysnet_admin. Roll back 010, 009, 008, 007, 006 FIRST
+-- (this file drops app_memberships and app_orgs, which they reference).
+--
+-- DATA LOSS: drops every org and membership, and the org_id column of app_user_projects.
+-- Restoring the old UNIQUE(user_id, folder_name) fails if one user holds the same folder
+-- in two orgs; delete the duplicates by hand first. app_users.role is untouched, so the
+-- pre-M5 app keeps working. If anything real was entered after go-live, restore the
+-- vzdump instead.
+--
+-- CHECK AFTER: \dt app_*  -- app_users, app_user_projects, app_audit_log only
+--              SELECT count(*) FROM information_schema.columns WHERE table_name='app_users' AND column_name='is_platform_admin'; -- 0
+
+BEGIN;
+
+ALTER TABLE app_user_projects DROP CONSTRAINT IF EXISTS app_user_projects_org_user_folder_key;
+DROP INDEX IF EXISTS idx_app_user_projects_org_user;
+ALTER TABLE app_user_projects DROP COLUMN IF EXISTS org_id;      -- also drops its FK(s)
+ALTER TABLE app_user_projects
+    ADD CONSTRAINT app_user_projects_user_id_folder_name_key UNIQUE (user_id, folder_name);
+
+DROP TABLE IF EXISTS app_memberships;
+ALTER TABLE app_users DROP COLUMN IF EXISTS is_platform_admin;
+DROP TABLE IF EXISTS app_orgs;
+
+COMMIT;

@@ -1,0 +1,24 @@
+-- 006_content.down.sql.example
+-- Rollback of 006. RUN AS: jaysnet_admin. Roll back 010, 009, 008, 007 first
+-- (007+ do not reference these tables, but 010 holds policies and grants on them).
+--
+-- DATA LOSS: drops every folder, dashboard, version and grant. Pre-go-live use only;
+-- afterwards restore the vzdump or export the specs first:
+--   COPY (SELECT * FROM app_dashboard_versions) TO '/tmp/versions.csv' CSV HEADER;  -- as postgres
+-- Dropping the tables does not fire the append-only triggers.
+--
+-- CHECK AFTER: \dt app_*   -- no app_content_nodes, app_dashboard_versions, app_grants
+--              SELECT proname FROM pg_proc WHERE proname LIKE 'app\_%' ESCAPE '\';  -- none of the 3 trigger functions
+
+BEGIN;
+
+DROP TABLE IF EXISTS app_grants;
+ALTER TABLE IF EXISTS app_content_nodes DROP CONSTRAINT IF EXISTS app_content_nodes_current_version_fk;
+DROP TABLE IF EXISTS app_dashboard_versions;
+DROP TABLE IF EXISTS app_content_nodes;
+
+DROP FUNCTION IF EXISTS app_content_nodes_guard();
+DROP FUNCTION IF EXISTS app_content_nodes_after_move();
+DROP FUNCTION IF EXISTS app_dashboard_versions_append_only();
+
+COMMIT;

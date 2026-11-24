@@ -1,0 +1,99 @@
+-- 009_audit_backfill.sql.example
+-- (1) app_audit_log gets org_id, target_type, target_id, ip.
+-- (2) Backfill: existing users -> memberships in WorldRisk; existing project rows -> WorldRisk.
+--     Nothing is created for ADARS.
+--
+-- RUN AS:  jaysnet_admin.   After 005-008 and BEFORE 010 (the normal order).
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/009_audit_backfill.sql
+-- Rollback: 009_audit_backfill.down.sql.example
+--
+-- RE-RUNNABLE: every statement is guarded (IF NOT EXISTS, ON CONFLICT DO NOTHING,
+-- UPDATE ... WHERE org_id IS NULL), so a second run changes nothing and reports 0 rows.
+-- It also works if run AFTER 010: under FORCE ROW LEVEL SECURITY the owner is subject to the
+-- policies, so the backfill first sets `app.org_id` to the WorldRisk org for this
+-- transaction (set_config(..., true)) and the policies then admit exactly those rows.
+-- It never needs, and never uses, superuser or BYPASSRLS.
+--
+-- BACKFILL RULES (current behaviour must not widen or narrow)
+--   * every row of app_users becomes a WorldRisk membership with role = app_users.role and
+--     is_active = app_users.is_active (existing admin -> WorldRisk admin; builder/viewer as is).
+--   * ADARS gets no membership: nobody sees ADARS until the director adds people on purpose.
+--   * every app_user_projects row (org_id IS NULL) -> WorldRisk. Admins have none; builders and
+--     viewers keep exactly their folders.
+--   * is_platform_admin is NOT touched (default false): Jay sets it by hand, see 005.
+--   * app_audit_log keeps org_id NULL for all historic rows (login events etc. are
+--     platform-level; there is no reliable org to infer). Only new rows carry an org.
+--   * app_users.role stays as legacy (read by the CURRENT app until the M5 app cut-over).
+--
+-- CHECKS AFTER RUNNING (the file prints NOTICEs with the counts; these confirm them):
+--   SELECT o.slug, count(m.*) AS memberships FROM app_orgs o LEFT JOIN app_memberships m ON m.org_id=o.id GROUP BY 1 ORDER BY 1;
+--       -- worldrisk = (SELECT count(*) FROM app_users), adars = 0
+--   SELECT count(*) FROM app_users u WHERE NOT EXISTS (SELECT 1 FROM app_memberships m WHERE m.user_id=u.id);   -- 0
+--   SELECT count(*) FROM app_user_projects WHERE org_id IS NULL;                                               -- 0
+--   SELECT u.username, u.role AS legacy_role, m.role AS wr_role FROM app_users u JOIN app_memberships m ON m.user_id=u.id
+--     JOIN app_orgs o ON o.id=m.org_id AND o.slug='worldrisk' WHERE u.role <> m.role;                          -- 0 rows (on first run)
+--   SELECT count(*) FROM app_user_projects p WHERE NOT EXISTS (SELECT 1 FROM app_memberships m WHERE m.org_id=p.org_id AND m.user_id=p.user_id); -- 0
+--   -- re-run the file: every NOTICE must say "inserted 0" / "updated 0".
+
+BEGIN;
+
+-- ---- (1) audit log columns -------------------------------------------------
+ALTER TABLE app_audit_log
+    ADD COLUMN IF NOT EXISTS org_id      UUID REFERENCES app_orgs(id),   -- NULL = platform event
+    ADD COLUMN IF NOT EXISTS target_type TEXT,
+    ADD COLUMN IF NOT EXISTS target_id   TEXT,
+    ADD COLUMN IF NOT EXISTS ip          INET;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_audit_log_target_type_len') THEN
+        ALTER TABLE app_audit_log
+            ADD CONSTRAINT app_audit_log_target_type_len CHECK (target_type IS NULL OR length(target_type) <= 64),
+            ADD CONSTRAINT app_audit_log_target_id_len   CHECK (target_id   IS NULL OR length(target_id)   <= 128);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_app_audit_log_org_created ON app_audit_log (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_audit_log_user        ON app_audit_log (user_id, created_at DESC);
+
+-- ---- (2) backfill ----------------------------------------------------------
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM app_orgs WHERE slug = 'worldrisk') THEN
+        RAISE EXCEPTION '009: organisation "worldrisk" not found; apply 005 first';
+    END IF;
+END $$;
+
+-- Org context for this transaction (admits the WorldRisk rows if 010 is already applied).
+SELECT set_config('app.org_id', (SELECT id::text FROM app_orgs WHERE slug = 'worldrisk'), true);
+
+DO $$
+DECLARE
+    wr  uuid := (SELECT id FROM app_orgs WHERE slug = 'worldrisk');
+    n   bigint;
+BEGIN
+    INSERT INTO app_memberships (org_id, user_id, role, is_active)
+    SELECT wr, u.id, u.role, u.is_active
+      FROM app_users u
+    ON CONFLICT (org_id, user_id) DO NOTHING;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE '009: memberships inserted into worldrisk: %', n;
+
+    UPDATE app_user_projects SET org_id = wr WHERE org_id IS NULL;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE '009: app_user_projects rows moved to worldrisk: %', n;
+
+    RAISE NOTICE '009: adars: nothing to backfill (by design)';
+END $$;
+
+-- A project row may only exist for a user who is a member of that org.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_user_projects_member_fk') THEN
+        ALTER TABLE app_user_projects
+            ADD CONSTRAINT app_user_projects_member_fk
+            FOREIGN KEY (org_id, user_id) REFERENCES app_memberships (org_id, user_id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+COMMIT;

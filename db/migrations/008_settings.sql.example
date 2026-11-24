@@ -1,0 +1,55 @@
+-- 008_settings.sql.example
+-- app_settings: system, organisation and user scoped settings (PLAN_BUILDER section E).
+--
+-- RUN AS:  jaysnet_admin.   After 007.
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/008_settings.sql
+-- Rollback: 008_settings.down.sql.example
+--
+-- Resolution (app side): user > organisation > system > code constant.
+-- Scope shapes (CHECK-enforced):
+--   system : org_id NULL, user_id NULL      one value per key for the whole portal
+--   org    : org_id set,  user_id NULL      one value per (org, key)
+--   user   : user_id set, org_id NULL       the user's own preference, follows them across
+--                                           orgs (ASSUMPTION: a user's date format or time
+--                                           zone is not per-org; if it should be, the user
+--                                           scope needs org_id NOT NULL and this CHECK changes)
+-- Key names are validated in the app (Zod allowlist: dateFormat, timeFormat, timeZone,
+-- region, language, numberFormat), so adding a key needs no migration; here only the
+-- shape is checked. The time-zone settings are DISPLAY only (R6); nothing here changes
+-- how rows are counted.
+--
+-- Not a plain "org_id NOT NULL" tenant table: org_id is NULL for system and user rows.
+-- 010 gives it its own per-scope policies instead of the standard tenant policy.
+--
+-- CHECKS AFTER RUNNING:
+--   \d app_settings
+--   -- shape CHECKs reject bad rows (each must ERROR; run inside BEGIN ... ROLLBACK):
+--   BEGIN; INSERT INTO app_settings (scope, key, value) VALUES ('org', 'timeZone', '"UTC"'); ROLLBACK;                 -- ERROR
+--   BEGIN; INSERT INTO app_settings (scope, org_id, key, value) SELECT 'system', id, 'x', '1' FROM app_orgs LIMIT 1; ROLLBACK; -- ERROR
+--   BEGIN; INSERT INTO app_settings (scope, key, value) VALUES ('system', 'language', '"en"'), ('system', 'language', '"fr"'); ROLLBACK; -- ERROR (unique)
+
+BEGIN;
+
+CREATE TABLE app_settings (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope      TEXT NOT NULL,
+    org_id     UUID REFERENCES app_orgs(id) ON DELETE CASCADE,
+    user_id    UUID REFERENCES app_users(id) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    value      JSONB NOT NULL,
+    updated_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_settings_scope_check CHECK (scope IN ('system', 'org', 'user')),
+    CONSTRAINT app_settings_scope_shape CHECK (
+           (scope = 'system' AND org_id IS NULL     AND user_id IS NULL)
+        OR (scope = 'org'    AND org_id IS NOT NULL AND user_id IS NULL)
+        OR (scope = 'user'   AND org_id IS NULL     AND user_id IS NOT NULL)
+    ),
+    CONSTRAINT app_settings_key_check   CHECK (key ~ '^[A-Za-z][A-Za-z0-9_.]{0,63}$'),
+    CONSTRAINT app_settings_value_size  CHECK (octet_length(value::text) <= 4096),
+    CONSTRAINT app_settings_unique UNIQUE NULLS NOT DISTINCT (scope, org_id, user_id, key)
+);
+CREATE INDEX idx_app_settings_org  ON app_settings (org_id)  WHERE org_id  IS NOT NULL;
+CREATE INDEX idx_app_settings_user ON app_settings (user_id) WHERE user_id IS NOT NULL;
+
+COMMIT;

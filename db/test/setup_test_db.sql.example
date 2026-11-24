@@ -1,0 +1,79 @@
+-- setup_test_db.sql.example
+-- Throwaway database for the tenant-isolation tests (PLAN_BUILDER section 3.3). The tests
+-- NEVER touch jaysnet_data: they connect to portal_test only.
+--
+-- Creates   database portal_test (owner portal_test_owner)
+--           role portal_test_owner : LOGIN, owns the schema, applies the migrations
+--           role portal_test_app   : LOGIN, same attributes as portal_app: NOSUPERUSER NOCREATEDB
+--                                    NOCREATEROLE NOINHERIT NOBYPASSRLS, statement_timeout 10s;
+--                                    table grants come from 010 (-v app_role=portal_test_app)
+-- RUN AS:   postgres, connected to the maintenance database (NOT jaysnet_data):
+--   SETUP:     sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres -f db/test/setup_test_db.sql
+--   TEARDOWN:  sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres -v teardown=1 -f db/test/setup_test_db.sql
+-- This file is NOT wrapped in BEGIN/COMMIT: CREATE DATABASE and DROP DATABASE cannot run inside
+-- a transaction. It is idempotent instead (re-running setup changes nothing that exists).
+-- Passwords: roles are created without one; set them interactively afterwards (they never
+-- enter this file or the shell history):  \password portal_test_owner   \password portal_test_app
+--
+-- THEN apply the schema AS portal_test_owner, in order (001 and 005-010; NOT 002/003/004: the
+-- test app role is created above, and the tracking tables and reader roles do not exist here):
+--   for f in 001_app_tables 005_orgs_memberships 006_content 007_integrations_datasets 008_settings 009_audit_backfill; do
+--     psql -v ON_ERROR_STOP=1 -U portal_test_owner -h localhost -d portal_test -f db/migrations/$f.sql*   # use the .sql or a copy of .sql.example
+--   done
+--   psql -v ON_ERROR_STOP=1 -v app_role=portal_test_app -U portal_test_owner -h localhost -d portal_test -f db/migrations/010_rls_grants.sql
+-- Tests then connect as portal_test_app (isolation) and portal_test_owner (fixtures: set
+-- app.org_id first, FORCE RLS applies to the owner too).
+--
+-- SAFETY NOTES
+--  * Roles are cluster-wide. The names are distinct from the real roles; they hold no
+--    privilege in jaysnet_data. PostgreSQL grants CONNECT on every database to PUBLIC by
+--    default, so these two roles CAN open a connection to jaysnet_data with their password
+--    but can read nothing there. If that matters, add pg_hba.conf lines that restrict them to
+--    database portal_test (not done here; pg_hba is outside this repo).
+--  * The test harness must refuse to run unless current_database() = 'portal_test'.
+--  * Teardown drops only portal_test and the two test roles.
+
+\if :{?teardown}
+    \echo 'TEARDOWN: dropping portal_test and the test roles'
+    DROP DATABASE IF EXISTS portal_test WITH (FORCE);
+    DROP ROLE IF EXISTS portal_test_app;
+    DROP ROLE IF EXISTS portal_test_owner;
+    \quit
+\endif
+
+-- refuse to run against the real database
+SELECT current_database() = 'jaysnet_data' AS on_real_db \gset
+\if :on_real_db
+    \echo 'REFUSING: connected to jaysnet_data. Connect to the postgres maintenance database.'
+    \quit
+\endif
+
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'portal_test_owner') AS mk_owner \gset
+\if :mk_owner
+    CREATE ROLE portal_test_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\endif
+
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'portal_test_app') AS mk_app \gset
+\if :mk_app
+    CREATE ROLE portal_test_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\endif
+ALTER ROLE portal_test_app SET statement_timeout = '10s';   -- same as portal_app (003)
+
+SELECT NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'portal_test') AS mk_db \gset
+\if :mk_db
+    CREATE DATABASE portal_test OWNER portal_test_owner;
+\endif
+
+REVOKE ALL ON DATABASE portal_test FROM PUBLIC;
+GRANT CONNECT ON DATABASE portal_test TO portal_test_owner, portal_test_app;
+
+\connect portal_test
+-- same schema-level privilege as portal_app has in production (003): USAGE only, no CREATE
+GRANT USAGE ON SCHEMA public TO portal_test_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CREATE, USAGE ON SCHEMA public TO portal_test_owner;
+
+-- verification: attributes must match portal_app
+SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit
+  FROM pg_roles WHERE rolname IN ('portal_test_owner', 'portal_test_app') ORDER BY 1;
+SELECT current_database() AS now_in;

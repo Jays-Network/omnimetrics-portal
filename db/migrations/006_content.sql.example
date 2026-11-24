@@ -1,0 +1,271 @@
+-- 006_content.sql.example
+-- Content tree (folders and dashboards), append-only dashboard versions, access grants.
+-- PLAN_BUILDER sections 2, 3 and A.
+--
+-- RUN AS:  jaysnet_admin.   After 005.
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/006_content.sql
+-- Rollback: 006_content.down.sql.example
+--
+-- Creates: app_content_nodes, app_dashboard_versions, app_grants + 3 trigger functions.
+-- Touches no existing table. RLS and grants to portal_app come in 010 (until then
+-- portal_app has NO access to these tables).
+--
+-- CROSS-ORG INTEGRITY BY CONSTRUCTION
+--   Every tenant table carries org_id, and every reference between tenant tables is a
+--   COMPOSITE foreign key that includes org_id: (org_id,parent_id)->nodes(org_id,id),
+--   (org_id,node_id,node_kind)->nodes(org_id,id,kind), (org_id,user_id)->memberships.
+--   A row therefore can never point at another org's row, even with a forged id.
+--   org_id and kind of a node are immutable (trigger).
+--
+-- TREE RULES (DB-enforced)
+--   * kind folder|dashboard; a dashboard cannot have children (trigger).
+--   * Top level (parent_id NULL) holds FOLDERS only (assumption, see CHECK below).
+--   * depth is maintained by trigger (root = 1), maximum 8; a move that would push any
+--     descendant past 8 is rejected; cycles are rejected. Writers cannot set depth.
+--   * Structural changes take a per-org advisory lock, so two concurrent moves cannot
+--     create a cycle or exceed the depth limit.
+--   * Sibling names unique (case-insensitive) among NON-deleted siblings. Restoring a
+--     soft-deleted node whose name is now taken raises a unique violation (app shows it).
+--   * Soft delete: deleted_at/deleted_by. Deleting a folder does not stamp its children;
+--     the app treats a node under a deleted ancestor as deleted. Hard DELETE is not
+--     granted to portal_app (010).
+--   * Versions: append-only (trigger blocks UPDATE, DELETE, TRUNCATE for everyone,
+--     including the owner; DROP TABLE is the only way out). current_version is a
+--     composite FK to the version row of the SAME node and org (deferred, so a node and
+--     its first version can be created in one transaction: insert node, insert version,
+--     update node.current_version).
+--
+-- CHECKS AFTER RUNNING (as jaysnet_admin; throwaway data inside a transaction you ROLLBACK):
+--   \dt app_*      -- + app_content_nodes, app_dashboard_versions, app_grants
+--   SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint
+--     WHERE conrelid IN ('app_content_nodes'::regclass,'app_dashboard_versions'::regclass,'app_grants'::regclass) ORDER BY 1;
+--   SELECT tgname, tgrelid::regclass FROM pg_trigger WHERE NOT tgisinternal AND tgrelid::regclass::text LIKE 'app_%' ORDER BY 2,1;
+--   -- Depth + isolation smoke test (all rolled back):
+--   BEGIN;
+--     INSERT INTO app_content_nodes (id, org_id, kind, name)
+--       SELECT '00000000-0000-0000-0000-0000000000a1', id, 'folder', 'smoke' FROM app_orgs WHERE slug='worldrisk';
+--     SELECT depth FROM app_content_nodes WHERE id='00000000-0000-0000-0000-0000000000a1';  -- 1
+--     -- a child in the OTHER org must fail on the composite FK:
+--     INSERT INTO app_content_nodes (org_id, parent_id, kind, name)
+--       SELECT id, '00000000-0000-0000-0000-0000000000a1', 'folder', 'x' FROM app_orgs WHERE slug='adars';  -- ERROR
+--   ROLLBACK;
+
+BEGIN;
+
+CREATE TABLE app_content_nodes (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id          UUID NOT NULL REFERENCES app_orgs(id),
+    parent_id       UUID,
+    kind            TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    depth           SMALLINT NOT NULL DEFAULT 1,        -- trigger-maintained
+    current_version INTEGER,                            -- dashboards only; FK added below
+    deleted_at      TIMESTAMPTZ,
+    deleted_by      UUID REFERENCES app_users(id),
+    created_by      UUID REFERENCES app_users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_content_nodes_kind_check   CHECK (kind IN ('folder', 'dashboard')),
+    CONSTRAINT app_content_nodes_name_check   CHECK (name = btrim(name) AND length(name) BETWEEN 1 AND 120),
+    CONSTRAINT app_content_nodes_depth_check  CHECK (depth BETWEEN 1 AND 8),
+    -- ASSUMPTION: only folders at the top level (tree is Organisation > Folder > ... > Dashboard).
+    CONSTRAINT app_content_nodes_root_folder  CHECK (parent_id IS NOT NULL OR kind = 'folder'),
+    CONSTRAINT app_content_nodes_version_kind CHECK (current_version IS NULL OR kind = 'dashboard'),
+    CONSTRAINT app_content_nodes_not_own_parent CHECK (parent_id IS DISTINCT FROM id),
+    CONSTRAINT app_content_nodes_deleted_pair CHECK (deleted_by IS NULL OR deleted_at IS NOT NULL),
+    -- Composite keys: targets for every cross-table FK that must stay inside one org.
+    CONSTRAINT app_content_nodes_org_id_key      UNIQUE (org_id, id),
+    CONSTRAINT app_content_nodes_org_id_kind_key UNIQUE (org_id, id, kind),
+    CONSTRAINT app_content_nodes_parent_fk
+        FOREIGN KEY (org_id, parent_id) REFERENCES app_content_nodes (org_id, id)   -- MATCH SIMPLE: NULL parent = root
+);
+
+-- Sibling names unique among non-deleted siblings (case-insensitive); roots and children separately.
+CREATE UNIQUE INDEX app_content_nodes_sibling_name_uq
+    ON app_content_nodes (org_id, parent_id, lower(name))
+    WHERE deleted_at IS NULL AND parent_id IS NOT NULL;
+CREATE UNIQUE INDEX app_content_nodes_root_name_uq
+    ON app_content_nodes (org_id, lower(name))
+    WHERE deleted_at IS NULL AND parent_id IS NULL;
+CREATE INDEX idx_app_content_nodes_children ON app_content_nodes (org_id, parent_id, position) WHERE deleted_at IS NULL;
+CREATE INDEX idx_app_content_nodes_deleted  ON app_content_nodes (org_id, deleted_at) WHERE deleted_at IS NOT NULL;
+
+CREATE TABLE app_dashboard_versions (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id     UUID NOT NULL REFERENCES app_orgs(id),
+    node_id    UUID NOT NULL,
+    node_kind  TEXT NOT NULL DEFAULT 'dashboard',
+    version    INTEGER NOT NULL,
+    spec       JSONB NOT NULL,
+    note       TEXT,
+    created_by UUID REFERENCES app_users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_dashboard_versions_version_check CHECK (version >= 1),
+    CONSTRAINT app_dashboard_versions_spec_object   CHECK (jsonb_typeof(spec) = 'object'),
+    CONSTRAINT app_dashboard_versions_kind_check    CHECK (node_kind = 'dashboard'),
+    CONSTRAINT app_dashboard_versions_note_len      CHECK (note IS NULL OR length(note) <= 500),
+    -- node_id is unique per org+version; also the FK target for nodes.current_version.
+    CONSTRAINT app_dashboard_versions_node_version_key UNIQUE (org_id, node_id, version),
+    -- Same org AND the node is a dashboard (folders cannot hold versions).
+    CONSTRAINT app_dashboard_versions_node_fk
+        FOREIGN KEY (org_id, node_id, node_kind) REFERENCES app_content_nodes (org_id, id, kind)
+);
+CREATE INDEX idx_app_dashboard_versions_node ON app_dashboard_versions (org_id, node_id, version DESC);
+
+-- "current" pointer: same org, same node, an existing version. Deferred so create-node +
+-- create-version + set-pointer can happen in one transaction.
+ALTER TABLE app_content_nodes
+    ADD CONSTRAINT app_content_nodes_current_version_fk
+    FOREIGN KEY (org_id, id, current_version)
+    REFERENCES app_dashboard_versions (org_id, node_id, version)
+    DEFERRABLE INITIALLY DEFERRED;
+
+-- Grants: node_id NULL = the whole organisation. access view|edit|manage. No deny rows.
+CREATE TABLE app_grants (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id     UUID NOT NULL REFERENCES app_orgs(id),
+    user_id    UUID NOT NULL,
+    node_id    UUID,
+    access     TEXT NOT NULL,
+    created_by UUID REFERENCES app_users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_grants_access_check CHECK (access IN ('view', 'edit', 'manage')),
+    CONSTRAINT app_grants_unique UNIQUE NULLS NOT DISTINCT (org_id, user_id, node_id),
+    -- the grantee must be a member of the SAME org; the node (if any) must belong to it
+    CONSTRAINT app_grants_member_fk FOREIGN KEY (org_id, user_id) REFERENCES app_memberships (org_id, user_id) ON DELETE CASCADE,
+    CONSTRAINT app_grants_node_fk   FOREIGN KEY (org_id, node_id) REFERENCES app_content_nodes (org_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_app_grants_node ON app_grants (org_id, node_id);
+
+-- ---------------------------------------------------------------------------
+-- Triggers
+-- ---------------------------------------------------------------------------
+
+-- BEFORE INSERT/UPDATE on nodes: immutability, parent rules, depth, cycles, depth limit.
+CREATE FUNCTION app_content_nodes_guard() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    p              app_content_nodes%ROWTYPE;
+    subtree_height integer := 0;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.org_id IS DISTINCT FROM OLD.org_id THEN
+            RAISE EXCEPTION 'app_content_nodes: org_id is immutable' USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.kind IS DISTINCT FROM OLD.kind THEN
+            RAISE EXCEPTION 'app_content_nodes: kind is immutable' USING ERRCODE = 'check_violation';
+        END IF;
+        IF NEW.parent_id IS NOT DISTINCT FROM OLD.parent_id THEN
+            -- depth may only change through the move propagation below
+            IF NEW.depth IS DISTINCT FROM OLD.depth
+               AND coalesce(current_setting('app.depth_sync', true), '') <> 'on' THEN
+                RAISE EXCEPTION 'app_content_nodes: depth is maintained by the database' USING ERRCODE = 'check_violation';
+            END IF;
+            RETURN NEW;
+        END IF;
+    END IF;
+
+    -- Structural change (insert, or parent changed): serialise per organisation.
+    PERFORM pg_advisory_xact_lock(hashtextextended('app_content_nodes:' || NEW.org_id::text, 0));
+
+    IF NEW.parent_id IS NULL THEN
+        NEW.depth := 1;
+    ELSE
+        SELECT * INTO p FROM app_content_nodes WHERE org_id = NEW.org_id AND id = NEW.parent_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'app_content_nodes: parent not found in this organisation' USING ERRCODE = 'foreign_key_violation';
+        END IF;
+        IF p.kind <> 'folder' THEN
+            RAISE EXCEPTION 'app_content_nodes: parent must be a folder' USING ERRCODE = 'check_violation';
+        END IF;
+        IF p.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN
+            RAISE EXCEPTION 'app_content_nodes: parent is deleted' USING ERRCODE = 'check_violation';
+        END IF;
+        IF TG_OP = 'UPDATE' THEN
+            -- cycle: the new parent must not be the node itself or one of its descendants
+            IF NEW.parent_id = NEW.id OR EXISTS (
+                WITH RECURSIVE anc(id, parent_id) AS (
+                    SELECT id, parent_id FROM app_content_nodes WHERE org_id = NEW.org_id AND id = NEW.parent_id
+                    UNION
+                    SELECT n.id, n.parent_id FROM app_content_nodes n
+                      JOIN anc a ON n.id = a.parent_id AND n.org_id = NEW.org_id
+                )
+                SELECT 1 FROM anc WHERE id = NEW.id
+            ) THEN
+                RAISE EXCEPTION 'app_content_nodes: a node cannot be moved under itself' USING ERRCODE = 'check_violation';
+            END IF;
+        END IF;
+        NEW.depth := p.depth + 1;
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        -- how deep is the subtree below this node (relative to its old depth)?
+        WITH RECURSIVE d(id, depth) AS (
+            SELECT id, depth FROM app_content_nodes WHERE org_id = NEW.org_id AND parent_id = NEW.id
+            UNION
+            SELECT n.id, n.depth FROM app_content_nodes n JOIN d ON n.parent_id = d.id WHERE n.org_id = NEW.org_id
+        )
+        SELECT coalesce(max(depth), OLD.depth) - OLD.depth INTO subtree_height FROM d;
+    END IF;
+
+    IF NEW.depth + subtree_height > 8 THEN
+        RAISE EXCEPTION 'app_content_nodes: maximum nesting depth (8) exceeded' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER app_content_nodes_guard
+    BEFORE INSERT OR UPDATE ON app_content_nodes
+    FOR EACH ROW EXECUTE FUNCTION app_content_nodes_guard();
+
+-- AFTER a move: shift the depth of every descendant by the same delta.
+CREATE FUNCTION app_content_nodes_after_move() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    IF NEW.depth <> OLD.depth THEN
+        PERFORM set_config('app.depth_sync', 'on', true);
+        WITH RECURSIVE d(id) AS (
+            SELECT id FROM app_content_nodes WHERE org_id = NEW.org_id AND parent_id = NEW.id
+            UNION
+            SELECT n.id FROM app_content_nodes n JOIN d ON n.parent_id = d.id WHERE n.org_id = NEW.org_id
+        )
+        UPDATE app_content_nodes c
+           SET depth = c.depth + (NEW.depth - OLD.depth)
+          FROM d WHERE c.id = d.id AND c.org_id = NEW.org_id;
+        PERFORM set_config('app.depth_sync', 'off', true);
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+-- Fires only when the parent changed, so the descendants' own depth updates do not re-fire it.
+CREATE TRIGGER app_content_nodes_after_move
+    AFTER UPDATE ON app_content_nodes
+    FOR EACH ROW WHEN (OLD.parent_id IS DISTINCT FROM NEW.parent_id)
+    EXECUTE FUNCTION app_content_nodes_after_move();
+
+-- Dashboard versions are append-only for everybody.
+CREATE FUNCTION app_dashboard_versions_append_only() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    RAISE EXCEPTION 'app_dashboard_versions is append-only (% is not allowed)', TG_OP
+        USING ERRCODE = 'insufficient_privilege';
+END;
+$$;
+
+CREATE TRIGGER app_dashboard_versions_no_update_delete
+    BEFORE UPDATE OR DELETE ON app_dashboard_versions
+    FOR EACH ROW EXECUTE FUNCTION app_dashboard_versions_append_only();
+CREATE TRIGGER app_dashboard_versions_no_truncate
+    BEFORE TRUNCATE ON app_dashboard_versions
+    FOR EACH STATEMENT EXECUTE FUNCTION app_dashboard_versions_append_only();
+
+COMMIT;

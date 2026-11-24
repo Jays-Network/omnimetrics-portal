@@ -1,0 +1,31 @@
+-- 009_audit_backfill.down.sql.example
+-- Rollback of 009. RUN AS: jaysnet_admin. Roll back 010 FIRST (RLS blocks the owner here
+-- unless app.org_id is set, and 010's down restores plain tables).
+--
+-- Undoes: the app_user_projects -> memberships FK, the org_id values on app_user_projects
+-- (set back to NULL, i.e. the 005 state), the memberships created by the backfill, and the
+-- audit columns. DATA LOSS: audit org_id/target_type/target_id/ip values written since 009
+-- (the historic rows never had them), and ALL memberships (including any added later).
+-- app_users.role was never changed, so the pre-M5 app keeps working.
+--
+-- CHECK AFTER: SELECT count(*) FROM app_memberships;                              -- 0
+--              SELECT count(*) FROM app_user_projects WHERE org_id IS NOT NULL;   -- 0
+--              SELECT column_name FROM information_schema.columns WHERE table_name='app_audit_log' ORDER BY 1; -- id, user_id, action, detail, created_at
+
+BEGIN;
+
+ALTER TABLE app_user_projects DROP CONSTRAINT IF EXISTS app_user_projects_member_fk;
+UPDATE app_user_projects SET org_id = NULL WHERE org_id IS NOT NULL;
+DELETE FROM app_memberships;
+
+DROP INDEX IF EXISTS idx_app_audit_log_org_created;
+DROP INDEX IF EXISTS idx_app_audit_log_user;
+ALTER TABLE app_audit_log
+    DROP CONSTRAINT IF EXISTS app_audit_log_target_type_len,
+    DROP CONSTRAINT IF EXISTS app_audit_log_target_id_len,
+    DROP COLUMN IF EXISTS org_id,
+    DROP COLUMN IF EXISTS target_type,
+    DROP COLUMN IF EXISTS target_id,
+    DROP COLUMN IF EXISTS ip;
+
+COMMIT;

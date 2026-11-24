@@ -8,6 +8,7 @@ node_modules/
 *.tsbuildinfo
 db/migrations/002_seed_admin.sql
 db/migrations/003_portal_app_role.sql
+db/migrations/004_portal_reader_roles.sql
 __pycache__/
 *.pyc
 grafana-export/

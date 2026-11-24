@@ -1,0 +1,120 @@
+-- 004_portal_reader_roles.sql.example
+-- One read-only database role PER ORGANISATION for tracking reads (R7, Jay's
+-- decision F6, 2026-11-20). Replaces the single `portal_reader` idea.
+--
+--   portal_reader_wr    SELECT on worldrisk_tracking ONLY  (WorldRisk org)
+--   portal_reader_adars SELECT on adars_tracking     ONLY  (ADARS org)
+--
+-- The DB, not only the SQL-terminal parser, enforces the separation: a query run
+-- through portal_reader_wr cannot read adars_tracking or any app_* table.
+--
+-- RUN AS:  postgres (superuser; CREATE ROLE is needed). By Jay, by hand.
+--   cp db/migrations/004_portal_reader_roles.sql.example db/migrations/004_portal_reader_roles.sql
+--   (edit the two passwords; the real file name is not committed: add it to .gitignore)
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.sql
+--   Generate passwords with: openssl rand -base64 32
+--
+-- Rollback: 004_portal_reader_roles.down.sql.example
+--
+-- This file contains EXACTLY two statements that touch the tracking tables, both
+-- `GRANT SELECT ... TO <reader role>`. It does not write to, alter or revoke on
+-- worldrisk_tracking or adars_tracking, and creates no other grant.
+--
+-- ROLE ATTRIBUTES
+--   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS: nothing beyond LOGIN.
+--   NOINHERIT: the role is not a member of any role anyway; this blocks silent
+--     privilege gain if someone ever runs GRANT <other role> TO portal_reader_*.
+--
+-- ROLE-LEVEL SETTINGS (applied at every new connection of that role)
+--   statement_timeout = 10s            Tracking tables have no index on folder_name or
+--                                      dates (CONTEXT section 2), so expect seq scans;
+--                                      10s is the agreed ceiling for dashboards.
+--   default_transaction_read_only = on Every transaction starts READ ONLY.
+--   timezone = 'Africa/Johannesburg'   See below.
+--
+--   IMPORTANT: default_transaction_read_only and statement_timeout are USERSET
+--   parameters, so a session can still change them (SET / BEGIN READ WRITE). They are
+--   a safety net, not the barrier. The barrier is that the roles hold SELECT on one
+--   table and nothing else (verify with the checks below), and, for terminal SQL, the
+--   parser plus BEGIN READ ONLY / always ROLLBACK (R7). Tracking tables stay
+--   write-protected for these roles because they own nothing and hold no INSERT/UPDATE/DELETE.
+--
+-- WHY timezone = 'Africa/Johannesburg' (ASSUMPTION, NEEDS JAY'S CONFIRMATION)
+--   row_modified_at and system_created_at are `timestamp WITHOUT time zone`; the zone
+--   in which the sync scripts store them is unconfirmed (CONTEXT section 2, Q8).
+--   For naive timestamps the session TimeZone matters in exactly these cases:
+--     - comparing them with now() / timestamptz (e.g. "no update for 2/6/12/24 h"):
+--       the naive value is interpreted as local time in the SESSION zone first;
+--     - explicit casts ::timestamptz, AT TIME ZONE, and date_trunc over timestamptz;
+--     - now()::date and CURRENT_DATE (R4: the 60-day window; day bucketing).
+--   Leaving it unset would silently inherit the server default (possibly UTC), so the
+--   same query could count differently per role. An explicit value makes it
+--   deterministic. Africa/Johannesburg was chosen because (a) the portal counts
+--   everything in PORTAL_TIMEZONE = Africa/Johannesburg (PLAN_BUILDER section E), so
+--   now()/CURRENT_DATE here agree with the portal's day boundaries, and (b) it has no
+--   DST, so there are no ambiguous or missing local hours. It is correct for
+--   row_modified_at ONLY IF the scripts write SAST local time. If they write UTC, the
+--   "hours since update" tiers would be off by 2 h until this is changed to 'UTC'.
+--   Changing it later is one ALTER ROLE ... SET timezone (no data change).
+--   BEFORE APPLYING, check what Grafana effectively uses today so numbers match (R5):
+--     SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ('grafana_reader','portal_app');
+--     \c jaysnet_data grafana_reader  then  SHOW timezone;
+--   and, right after a sync run, compare:
+--     SELECT max(row_modified_at), now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'Africa/Johannesburg'
+--     FROM worldrisk_tracking;   -- (read-only query) the closest one is the stored zone.
+--   If the answer is not Africa/Johannesburg, edit BOTH ALTER ROLE lines below. Any
+--   resulting change in a number is an R6 entry in docs/DECISIONS.md.
+--
+-- CHECKS AFTER RUNNING (as postgres):
+--   -- 1. attributes (expect: login t, super f, createdb f, createrole f, bypassrls f, inherit f, repl f)
+--   SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit, rolreplication
+--     FROM pg_roles WHERE rolname IN ('portal_reader_wr','portal_reader_adars') ORDER BY 1;
+--   -- 2. role settings (expect statement_timeout=10s, default_transaction_read_only=on, timezone=Africa/Johannesburg)
+--   SELECT r.rolname, s.setconfig FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+--     WHERE r.rolname IN ('portal_reader_wr','portal_reader_adars') ORDER BY 1;
+--   -- 3. privileges (expect exactly: wr/worldrisk t, wr/adars f, adars/adars t, adars/worldrisk f)
+--   SELECT has_table_privilege('portal_reader_wr','worldrisk_tracking','SELECT')    AS wr_on_wr,
+--          has_table_privilege('portal_reader_wr','adars_tracking','SELECT')        AS wr_on_adars,
+--          has_table_privilege('portal_reader_adars','adars_tracking','SELECT')     AS adars_on_adars,
+--          has_table_privilege('portal_reader_adars','worldrisk_tracking','SELECT') AS adars_on_wr;
+--   -- 4. no write privilege anywhere, and every table each role can read (expect only its own tracking table)
+--   SELECT r.rolname, c.relname, p.priv
+--     FROM (VALUES ('portal_reader_wr'),('portal_reader_adars')) r(rolname)
+--     CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+--     CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER')) p(priv)
+--     WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f')
+--       AND has_table_privilege(r.rolname, c.oid, p.priv)
+--     ORDER BY 1, 2, 3;                 -- expect 2 rows: each role / its table / SELECT
+--   -- 5. no app_* access (expect all false)
+--   SELECT has_table_privilege('portal_reader_wr','app_users','SELECT'), has_table_privilege('portal_reader_adars','app_users','SELECT');
+--   -- 6. connection test (from the app host, with the real password):
+--   --    psql "postgresql://portal_reader_wr@localhost:5432/jaysnet_data" -c "SHOW timezone" -c "SHOW default_transaction_read_only"
+--   --    -c "SELECT count(*) FROM adars_tracking"   -- expect: permission denied for table adars_tracking
+
+BEGIN;
+
+CREATE ROLE portal_reader_wr LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD_WR'
+    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+
+CREATE ROLE portal_reader_adars LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD_ADARS'
+    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+
+ALTER ROLE portal_reader_wr    SET statement_timeout = '10s';
+ALTER ROLE portal_reader_wr    SET default_transaction_read_only = on;
+ALTER ROLE portal_reader_wr    SET timezone = 'Africa/Johannesburg';
+
+ALTER ROLE portal_reader_adars SET statement_timeout = '10s';
+ALTER ROLE portal_reader_adars SET default_transaction_read_only = on;
+ALTER ROLE portal_reader_adars SET timezone = 'Africa/Johannesburg';
+
+-- Connection and schema lookup: the minimum a role needs to run a SELECT.
+-- (PUBLIC already holds CONNECT on the database and USAGE on schema public by default;
+--  the explicit grants make the intent visible and survive a later REVOKE FROM PUBLIC.)
+GRANT CONNECT ON DATABASE jaysnet_data TO portal_reader_wr, portal_reader_adars;
+GRANT USAGE ON SCHEMA public TO portal_reader_wr, portal_reader_adars;
+
+-- The ONLY two grants on tracking data in the whole migration set.
+GRANT SELECT ON worldrisk_tracking TO portal_reader_wr;
+GRANT SELECT ON adars_tracking     TO portal_reader_adars;
+
+COMMIT;

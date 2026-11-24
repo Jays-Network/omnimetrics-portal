@@ -1,0 +1,88 @@
+-- 005_orgs_memberships.sql.example
+-- Organisations, platform-admin flag, per-org memberships, org-scoped tracking scope.
+-- PLAN_BUILDER sections 3 and A.
+--
+-- RUN AS:  jaysnet_admin (owner of the app_* tables from 001). NOT postgres: new
+--          tables must have the same owner as the 001 tables.
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/005_orgs_memberships.sql
+--   (copy from .example first, or run the .example directly: it holds no secret)
+-- Rollback: 005_orgs_memberships.down.sql.example
+--
+-- Touches only app_* objects. Creates: app_orgs, app_memberships; alters app_users and
+-- app_user_projects. No data is moved here (backfill is 009). No RLS yet (010).
+-- Nothing in the app breaks after this file: new columns are nullable or defaulted, the
+-- old app_users.role stays (legacy, read by the current code until M5 app cut-over).
+--
+-- PLATFORM ADMIN (manual, never from the app or this file). After 005, Jay runs ONE line
+-- as jaysnet_admin or postgres, with his own username:
+--   UPDATE app_users SET is_platform_admin = true WHERE username = 'Jay';
+-- Verify: SELECT username, is_platform_admin FROM app_users;   -- exactly one true.
+-- (010 removes portal_app's right to write this column, so only a DB-level admin can.)
+--
+-- CHECKS AFTER RUNNING:
+--   SELECT slug, name, status FROM app_orgs ORDER BY slug;          -- adars, worldrisk
+--   \d app_memberships
+--   SELECT column_name, data_type, column_default FROM information_schema.columns
+--     WHERE table_name='app_users' AND column_name='is_platform_admin';  -- boolean, false
+--   SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+--     WHERE conrelid='app_user_projects'::regclass ORDER BY 1;  -- new unique (org_id,user_id,folder_name); old (user_id,folder_name) gone
+--   SELECT count(*) FROM app_user_projects WHERE org_id IS NOT NULL;    -- 0 (backfill is 009)
+
+BEGIN;
+
+-- Organisations (the tenant root; not itself row-level secured: requireOrg must resolve
+-- a slug BEFORE any org context exists).
+CREATE TABLE app_orgs (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_orgs_slug_format CHECK (slug ~ '^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$'),
+    CONSTRAINT app_orgs_name_len    CHECK (length(btrim(name)) BETWEEN 1 AND 120),
+    CONSTRAINT app_orgs_status      CHECK (status IN ('active', 'suspended', 'archived')),
+    CONSTRAINT app_orgs_slug_key    UNIQUE (slug)
+);
+
+-- Seed the two organisations. Idempotent.
+INSERT INTO app_orgs (slug, name) VALUES
+    ('worldrisk', 'WorldRisk'),
+    ('adars',     'ADARS')
+ON CONFLICT (slug) DO NOTHING;
+
+-- Platform admin (the director). Default false; set ONLY by hand (see header).
+ALTER TABLE app_users
+    ADD COLUMN is_platform_admin BOOLEAN NOT NULL DEFAULT false;
+
+-- Per-org role. Replaces app_users.role (kept as legacy until a later migration drops it).
+CREATE TABLE app_memberships (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id     UUID NOT NULL REFERENCES app_orgs(id),
+    user_id    UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,
+    is_active  BOOLEAN NOT NULL DEFAULT true,
+    created_by UUID REFERENCES app_users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT app_memberships_role_check CHECK (role IN ('admin', 'builder', 'viewer')),
+    CONSTRAINT app_memberships_org_user_key UNIQUE (org_id, user_id)   -- also the FK target for (org_id,user_id)
+);
+CREATE INDEX idx_app_memberships_user_id ON app_memberships(user_id);
+
+-- Tracking scope per org. org_id is NULLABLE here on purpose: existing rows get it in
+-- 009 (backfill) and 010 then sets NOT NULL. The FK to app_memberships(org_id,user_id)
+-- is added in 009, after the memberships exist.
+ALTER TABLE app_user_projects
+    ADD COLUMN org_id UUID REFERENCES app_orgs(id);
+
+ALTER TABLE app_user_projects
+    ADD CONSTRAINT app_user_projects_org_user_folder_key UNIQUE (org_id, user_id, folder_name);
+
+-- The old per-user unique would forbid the same folder in two orgs for one user.
+-- (001 created it inline, so PostgreSQL named it by default.)
+ALTER TABLE app_user_projects
+    DROP CONSTRAINT app_user_projects_user_id_folder_name_key;
+
+CREATE INDEX idx_app_user_projects_org_user ON app_user_projects(org_id, user_id);
+
+COMMIT;
