@@ -47,8 +47,10 @@
 --         all, writable only by the platform role; user rows only by that user
 --       app_allowed_hosts (org_id NULL = global): readable if global or own org; written only by
 --         the platform role
---       app_integrations: tenant policy + two RESTRICTIVE policies (INSERT, UPDATE): a
---         credential_source other than 'stored' (an env: source) needs the platform role
+--       app_integrations: tenant policy + three RESTRICTIVE policies (INSERT, UPDATE, DELETE):
+--         a credential_source other than 'stored' (an env: source) can be written, changed or
+--         deleted only by the platform role; for portal_app an existing env: row can be read but
+--         UPDATE and DELETE touch 0 rows
 --     NOT row-secured, by design: app_users (login must read it before any context) and
 --     app_orgs (requireOrg resolves a slug before an org context exists). The generic
 --     assertion below fails the migration if any OTHER app_* table lacks FORCE RLS.
@@ -162,13 +164,22 @@ BEGIN
     END LOOP;
 END $$;
 
--- integrations: only the platform role may write a non-'stored' (env:) credential source.
+-- integrations: only the platform role may create, change or delete a non-'stored' (env:) row.
 -- RESTRICTIVE = AND-ed with the tenant policy. One policy per command (a policy has one).
--- (007's CHECK already limits env: sources to env:DATABASE_URL_READONLY_*.)
+--   INSERT: WITH CHECK      new row must be 'stored' (or platform)
+--   UPDATE: USING           the EXISTING row must be 'stored' (an env: row is invisible to the
+--                           update: 0 rows), and WITH CHECK the NEW row must be 'stored' (a stored
+--                           row cannot be switched to env:)
+--   DELETE: USING           an env: row cannot be deleted (0 rows)
+-- SELECT is untouched: managed env: rows stay listable. (007's CHECK already limits env: sources
+-- to env:DATABASE_URL_READONLY_*.) Managed rows are seeded by 011 as postgres.
 CREATE POLICY cred_source_insert ON app_integrations AS RESTRICTIVE FOR INSERT
     WITH CHECK (credential_source = 'stored' OR app_is_platform());
 CREATE POLICY cred_source_update ON app_integrations AS RESTRICTIVE FOR UPDATE
+    USING (credential_source = 'stored' OR app_is_platform())
     WITH CHECK (credential_source = 'stored' OR app_is_platform());
+CREATE POLICY cred_source_delete ON app_integrations AS RESTRICTIVE FOR DELETE
+    USING (credential_source = 'stored' OR app_is_platform());
 
 -- memberships
 ALTER TABLE app_memberships ENABLE ROW LEVEL SECURITY;
@@ -256,9 +267,9 @@ GRANT SELECT, INSERT ON app_dashboard_versions TO :"app_role";
 -- Grants: add, change, revoke.
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_grants TO :"app_role";
 
--- Hosts (RLS: writes need the platform role, so these write grants can never succeed for
--- portal_app; left as designed in 010 v1, see the report), datasets, fields, settings.
-GRANT SELECT, INSERT, UPDATE, DELETE ON app_allowed_hosts TO :"app_role";
+-- Hosts: read only. The allowlist is written by the platform role alone (RLS says so too).
+GRANT SELECT ON app_allowed_hosts TO :"app_role";
+-- Datasets, fields, settings.
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_datasets TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_dataset_fields TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_settings TO :"app_role";
@@ -360,6 +371,11 @@ BEGIN
        OR has_function_privilege(rp, 'app_integration_credentials(uuid)', 'EXECUTE') THEN
         RAISE EXCEPTION '010: EXECUTE on app_integration_credentials must be held by % only', ra;
     END IF;
+    -- portal_app cannot write the host allowlist
+    IF has_table_privilege(ra, 'app_allowed_hosts', 'INSERT') OR has_table_privilege(ra, 'app_allowed_hosts', 'UPDATE')
+       OR has_table_privilege(ra, 'app_allowed_hosts', 'DELETE') THEN
+        RAISE EXCEPTION '010: % can write app_allowed_hosts', ra;
+    END IF;
     -- portal_app cannot write organisations
     IF has_table_privilege(ra, 'app_orgs', 'INSERT') OR has_table_privilege(ra, 'app_orgs', 'UPDATE')
        OR has_table_privilege(ra, 'app_orgs', 'DELETE') THEN
@@ -406,7 +422,7 @@ COMMIT;
 --   app_content_nodes                     x  x  x
 --   app_dashboard_versions                x  x                (append-only)
 --   app_grants                            x  x  x  x
---   app_allowed_hosts                     x  x  x  x          x  x  x  x      app: writes denied by RLS
+--   app_allowed_hosts                     x                   x  x  x  x
 --   app_integrations                      c  x  x  x          (none)          app: SELECT on all columns
 --                                                                              except cred_ciphertext, cred_nonce
 --   app_datasets / app_dataset_fields     x  x  x  x

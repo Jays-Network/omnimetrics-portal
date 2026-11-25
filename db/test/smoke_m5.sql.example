@@ -1,8 +1,8 @@
 -- smoke_m5.sql.example
 -- Behavioural smoke test of migrations 005-010 in the THROWAWAY database portal_test.
 -- Run by Jay, twice, once per role (the file detects which one it is and runs that role's tests):
---   psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
---   psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
+--   psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
+--   psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
 -- (drop the grep to see every PASS line; results arrive as NOTICEs.)
 --
 -- EVERYTHING RUNS INSIDE ONE TRANSACTION THAT ENDS WITH ROLLBACK. Nothing persists. The file
@@ -10,8 +10,14 @@
 -- Prerequisite: setup_test_db.sql.example applied, then 001 and 005-010 (see its header). The
 -- database must be empty of app data (fresh): the "no context returns 0 rows" checks assume it.
 --
--- EXPECTED RESULT: the last line reads "smoke_m5 (<role>): N passed, 0 FAILED" and no line starts
--- with FAIL. Each test below states its expected outcome in the table of tests: "ERR:<regex>" = the
+-- OPTIONAL PREREQUISITE for 4 tests (535-538, env: rows): apply 011 to portal_test first, as postgres:
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -f db/migrations/011_seed_managed_sources.sql.example
+-- (it is the only way to create an env: row; see the comment above test 535). Without it those tests
+-- print SKIP and the summary reports them as skipped. 011 also seeds the global host localhost:5432,
+-- which is why test 131 only counts org-owned host rows.
+--
+-- EXPECTED RESULT: the last line reads "smoke_m5 (<role>): N passed, 0 FAILED, 0 skipped" and no line
+-- starts with FAIL. Each test below states its expected outcome in the table of tests: "ERR:<regex>" = the
 -- statement must raise an error whose message matches the regex; "OK" = must succeed; anything
 -- else = the single value the statement must return. A test that unexpectedly SUCCEEDS is rolled
 -- back by the harness before the next one. Session context (app.org_id / app.user_id) is set by
@@ -28,7 +34,9 @@
 --    audit user_id forgery refused, INSERT ... RETURNING refused for an invisible row; no write to
 --    is_platform_admin; no SELECT of cred_ciphertext / cred_nonce (also via SELECT *); credential
 --    function works only in the owning org; env: integrations refused (JWT_SECRET by CHECK,
---    env:DATABASE_URL_READONLY_* by the restrictive policy, INSERT and UPDATE); org writes denied;
+--    env:DATABASE_URL_READONLY_* by the restrictive policy, INSERT and UPDATE; an existing env: row is
+--    untouched by UPDATE and DELETE, 0 rows); portal_app has no INSERT/UPDATE/DELETE on app_allowed_hosts;
+--    org writes denied;
 --    settings: org and own-user scope writable, system scope and another user's scope not.
 --  as portal_test_platform (700-999): app_is_platform() true; org insert/update ok, delete denied;
 --    memberships reachable without org context (INSERT reaches the FK, not RLS), no DELETE; hosts and
@@ -90,6 +98,9 @@ BEGIN
         PERFORM set_config('smoke.' || tag || '_dash', d::text, true);
         PERFORM set_config('smoke.' || tag || '_integ', i::text, true);
         PERFORM set_config('smoke.' || tag || '_integ_cred', ic::text, true);
+        -- managed env: row seeded by 011 (as postgres), if applied to portal_test; '' = absent -> its tests SKIP
+        PERFORM set_config('smoke.' || tag || '_env', coalesce((SELECT id::text FROM app_integrations
+                 WHERE org_id = o AND credential_source LIKE 'env:DATABASE_URL_READONLY_%' LIMIT 1), ''), true);
 
         IF tag = 'a' THEN
             f := NULL;
@@ -112,6 +123,8 @@ DO $smoke$
 DECLARE
     kind text := CASE current_user WHEN 'portal_test_app' THEN 'app' WHEN 'portal_test_platform' THEN 'platform' END;
     tok  text;
+    skip boolean;
+    skipped int := 0;
     t    record;
     q    text;
     got  text;
@@ -134,7 +147,7 @@ BEGIN
                          'app_dataset_fields','app_settings'] AS del,
                    ARRAY['app_memberships','app_user_projects','app_content_nodes','app_dashboard_versions',
                          'app_grants','app_integrations','app_datasets','app_dataset_fields','app_settings',
-                         'app_audit_log','app_allowed_hosts'] AS allt,
+                         'app_audit_log'] AS allt,
                    ARRAY['app_user_projects','app_content_nodes','app_dashboard_versions','app_grants',
                          'app_integrations','app_datasets','app_dataset_fields'] AS denied
         ),
@@ -144,6 +157,7 @@ BEGIN
           (110, 'app', 'a',    'org B rows invisible in {T}',    $q$SELECT count(*)::text FROM {T} WHERE org_id = {org_b}$q$, '0', 'tenant'),
           (120, 'app', 'b',    'org A rows invisible in {T}',    $q$SELECT count(*)::text FROM {T} WHERE org_id = {org_a}$q$, '0', 'tenant'),
           (130, 'app', 'none', 'no context: 0 rows in {T}',      $q$SELECT count(*)::text FROM {T}$q$, '0', 'allt'),
+          (131, 'app', 'none', 'no context: no org-owned host rows (global rows, e.g. 011 localhost, are readable by design)', $q$SELECT count(*)::text FROM app_allowed_hosts WHERE org_id IS NOT NULL$q$, '0', NULL),
           (140, 'app', 'a_user_only', 'no org, user A: only own membership (self_read)', $q$SELECT count(*)::text FROM app_memberships$q$, '1', NULL),
           (141, 'app', 'a_user_only', 'no org: content still invisible', $q$SELECT count(*)::text FROM app_content_nodes$q$, '0', NULL),
           -- ===== 2xx: tenant isolation, writes into org B from context A ==========================
@@ -161,6 +175,9 @@ BEGIN
           (220, 'app', 'a', 'UPDATE of org B rows touches 0 rows: {T}', $q$WITH u AS (UPDATE {T} SET org_id = org_id WHERE org_id = {org_b} RETURNING 1) SELECT count(*)::text FROM u$q$, '0', 'upd'),
           (230, 'app', 'a', 'DELETE of org B rows touches 0 rows: {T}', $q$WITH d AS (DELETE FROM {T} WHERE org_id = {org_b} RETURNING 1) SELECT count(*)::text FROM d$q$, '0', 'del'),
           (240, 'app', 'b', 'mirror: org B context cannot touch org A grants', $q$WITH d AS (DELETE FROM app_grants WHERE org_id = {org_a} RETURNING 1) SELECT count(*)::text FROM d$q$, '0', NULL),
+          (250, 'app', 'a', 'portal_app INSERT into app_allowed_hosts refused by privilege', $q$INSERT INTO app_allowed_hosts (host, port_min, port_max) VALUES ('example.test', 1, 2)$q$, 'ERR:permission denied', NULL),
+          (251, 'app', 'a', 'portal_app UPDATE of app_allowed_hosts refused by privilege',   $q$UPDATE app_allowed_hosts SET note = 'x'$q$, 'ERR:permission denied', NULL),
+          (252, 'app', 'a', 'portal_app DELETE from app_allowed_hosts refused by privilege', $q$DELETE FROM app_allowed_hosts$q$, 'ERR:permission denied', NULL),
           -- ===== 3xx: content tree ================================================================
           (300, 'app', 'a', 'depth 8 accepted (L8 under L7)', $q$WITH i AS (INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L7'), 'folder', 'L8') RETURNING depth) SELECT depth::text FROM i$q$, '8', NULL),
           (310, 'app', 'a', 'depth 9 rejected (child of L8)',  $q$INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L8'), 'folder', 'L9')$q$, 'ERR:maximum nesting depth', NULL),
@@ -183,7 +200,7 @@ BEGIN
           (402, 'app', 'a', 'audit TRUNCATE denied',          $q$TRUNCATE app_audit_log$q$, 'ERR:permission denied', NULL),
           (410, 'app', 'a', 'audit insert as the current user and org', $q$WITH i AS (INSERT INTO app_audit_log (org_id, user_id, action) VALUES (app_current_org(), app_current_user(), 'smoke') RETURNING 1) SELECT count(*)::text FROM i$q$, '1', NULL),
           (411, 'app', 'none', 'audit insert with no org and no user (login event) is allowed', $q$INSERT INTO app_audit_log (action) VALUES ('smoke-login')$q$, 'OK', NULL),
-          (412, 'app', 'none', 'same insert WITH RETURNING fails: the new row is not visible to the caller', $q$INSERT INTO app_audit_log (action) VALUES ('smoke-login2') RETURNING 1$q$, 'ERR:row-level security', NULL),
+          (412, 'app', 'none', 'same insert WITH RETURNING fails: the new row is not visible to the caller', $q$INSERT INTO app_audit_log (action) VALUES ('smoke-login2') RETURNING id$q$, 'ERR:row-level security', NULL),
           (413, 'app', 'a', 'audit insert as ANOTHER user refused', $q$INSERT INTO app_audit_log (org_id, user_id, action) VALUES (app_current_org(), {user_b}, 'forged')$q$, 'ERR:row-level security', NULL),
           (414, 'app', 'a', 'audit row visible to its own org', $q$SELECT count(*)::text FROM app_audit_log WHERE action = 'smoke'$q$, '1', NULL),
           (415, 'app', 'b', 'audit row invisible to the other org', $q$SELECT count(*)::text FROM app_audit_log WHERE action = 'smoke'$q$, '0', NULL),
@@ -206,6 +223,15 @@ BEGIN
           (531, 'app', 'a', 'env:DATABASE_URL_READONLY_WR refused for portal_app (INSERT, restrictive policy)', $q$INSERT INTO app_integrations (org_id, kind, name, host, port, database, credential_source) VALUES (app_current_org(), 'postgres', 'local wr', 'localhost', 5432, 'x', 'env:DATABASE_URL_READONLY_WR')$q$, 'ERR:row-level security', NULL),
           (532, 'app', 'a', 'switching an integration to an env: source refused (UPDATE, restrictive policy)', $q$UPDATE app_integrations SET credential_source = 'env:DATABASE_URL_READONLY_WR' WHERE id = {a_integ}$q$, 'ERR:row-level security', NULL),
           (533, 'app', 'a', 'CHECK refuses a malformed env: name even in a bare UPDATE', $q$UPDATE app_integrations SET credential_source = 'env:JWT_SECRET' WHERE id = {a_integ}$q$, 'ERR:(row-level security|check constraint)', NULL),
+          -- 535-538 need a managed env: row. NOTHING in this file can create one: portal_app is refused by
+          -- the restrictive policy, portal_platform has no grant on app_integrations, and the owner is not
+          -- the platform role (FORCE RLS applies to it). So they use the rows that 011 seeds as postgres
+          -- (BYPASSRLS). Apply 011_seed_managed_sources.sql.example to portal_test as postgres BEFORE the
+          -- app run (see header); without it the fixtures leave {a_env}/{b_env} empty and these tests are SKIPPED.
+          (535, 'app', 'a', 'UPDATE of an existing env: integration touches 0 rows', $q$WITH u AS (UPDATE app_integrations SET name = 'hijacked' WHERE id = {a_env} RETURNING 1) SELECT count(*)::text FROM u$q$, '0', NULL),
+          (536, 'app', 'a', 'DELETE of an existing env: integration touches 0 rows', $q$WITH d AS (DELETE FROM app_integrations WHERE id = {a_env} RETURNING 1) SELECT count(*)::text FROM d$q$, '0', NULL),
+          (537, 'app', 'a', 'the env: integration is still listable (SELECT unrestricted)', $q$SELECT count(*)::text FROM app_integrations WHERE id = {a_env} AND has_credentials = false AND credential_source LIKE 'env:DATABASE_URL_READONLY_%'$q$, '1', NULL),
+          (538, 'app', 'b', 'org B cannot see or touch org A''s env: row', $q$WITH u AS (UPDATE app_integrations SET name = 'x' WHERE id = {a_env} RETURNING 1) SELECT count(*)::text FROM u$q$, '0', NULL),
           (534, 'app', 'a', 'a stored integration can still be updated', $q$WITH u AS (UPDATE app_integrations SET name = 'plain 2' WHERE id = {a_integ} RETURNING 1) SELECT count(*)::text FROM u$q$, '1', NULL),
           -- ===== 6xx: settings ====================================================================
           (600, 'app', 'a', 'system scope write refused (an org admin is just portal_app + org context)', $q$INSERT INTO app_settings (scope, key, value) VALUES ('system', 'language', '"en"')$q$, 'ERR:row-level security', NULL),
@@ -251,10 +277,19 @@ BEGIN
          ORDER BY tests.n, x.k
     LOOP
         q := t.sql;
+        skip := false;
         FOREACH tok IN ARRAY ARRAY['org_a','org_b','user_a','user_b','a_folder','a_dash','a_integ','a_integ_cred',
-                                   'b_folder','b_dash','b_integ'] LOOP
+                                   'b_folder','b_dash','b_integ','a_env','b_env'] LOOP
+            IF position('{' || tok || '}' IN q) > 0 AND coalesce(current_setting('smoke.' || tok, true), '') = '' THEN
+                skip := true;      -- a fixture this test needs does not exist (011 not applied)
+            END IF;
             q := replace(q, '{' || tok || '}', quote_nullable(current_setting('smoke.' || tok, true)));
         END LOOP;
+        IF skip THEN
+            skipped := skipped + 1;
+            RAISE NOTICE 'SKIP %  %  (apply 011 as postgres to portal_test first)', t.n, t.label;
+            CONTINUE;
+        END IF;
 
         PERFORM set_config('app.org_id',
             CASE t.ctx WHEN 'a' THEN coalesce(current_setting('smoke.org_a', true), '')
@@ -296,7 +331,7 @@ BEGIN
         END IF;
     END LOOP;
 
-    RAISE NOTICE 'smoke_m5 (%): % passed, % FAILED', current_user, pass, fail;
+    RAISE NOTICE 'smoke_m5 (%): % passed, % FAILED, % skipped', current_user, pass, fail, skipped;
 END
 $smoke$;
 

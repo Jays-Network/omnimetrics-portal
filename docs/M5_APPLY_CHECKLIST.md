@@ -14,8 +14,9 @@ Each is one transaction. Run with `-v ON_ERROR_STOP=1` (do NOT use `-1`; the fil
 | 008 `settings` | `jaysnet_admin` | `app_settings` |
 | 009 `audit_backfill` | `jaysnet_admin` | audit columns, WorldRisk backfill |
 | 010 `rls_grants` | `jaysnet_admin` | RLS + grants to `portal_app` and `portal_platform`, credential function (apply WITH the M5 app release) |
+| 011 `seed_managed_sources` | `postgres` (bypasses RLS; the file refuses anyone else) | global host `localhost:5432` + one managed `env:` integration per org (no credential) |
 
-Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010. Rollback is the exact reverse: 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
+Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010 → 011. Rollback is the exact reverse: 011 → 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
 **Passwords are never in a file.** 003b and 004 create the roles with LOGIN and no password; Jay sets each one by hand with `\password` (section 1). A role without a password cannot log in (scram/md5).
 005 to 009 are safe for the CURRENT app (additive; legacy `app_users.role` and the old reads still work). 010 changes behaviour for it (see "010 cut-over").
 
@@ -43,7 +44,7 @@ Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 
 7. **Time-zone decision for 004** (R6 relevant): run the two queries in the 004 header (Grafana's effective timezone; stored zone of `row_modified_at`). Edit the two `ALTER ROLE ... SET timezone` lines if the answer is not `Africa/Johannesburg`. Record the outcome in `docs/DECISIONS.md` if any number can change.
 8. **Passwords** for the three new roles (`portal_reader_wr`, `portal_reader_adars`, `portal_platform`) generated with `openssl rand -base64 32` and kept in your password manager. They go only into `\password` (section 1) and then into `.env` (`DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `DATABASE_URL_PLATFORM`). Nothing is typed into a file or onto a command line. The real `003_*.sql` / `004_*.sql` copies stay git-ignored (`.gitignore` lines kept).
 9. **Env list for the M5 release** (`.env`, outside git): `DATABASE_URL` (portal_app), `DATABASE_URL_PLATFORM` (portal_platform, used ONLY by `withPlatform()`; never given to any other code path), `DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `INTEGRATION_KEYS`. The only `env:` credential sources the schema accepts are `env:DATABASE_URL_READONLY_<NAME>`.
-10. **Test database green first**: `db/test/setup_test_db.sql.example` applied, 001 and 005 to 010 applied there, and `db/test/smoke_m5.sql.example` run once as `portal_test_app` and once as `portal_test_platform` with `0 FAILED` (section 6). Do not start section 1 before this.
+10. **Test database green first**: `db/test/setup_test_db.sql.example` applied, 001 and 005 to 010 applied there, 011 applied there as `postgres` (so the env: row tests run), and `db/test/smoke_m5.sql.example` run once as `portal_test_app` and once as `portal_test_platform` with `0 FAILED, 0 skipped` (section 6). Do not start section 1 before this.
 11. **Row snapshot** (baseline for later comparison):
    ```sql
    SELECT (SELECT count(*) FROM app_users) users, (SELECT count(*) FROM app_user_projects) projects, (SELECT count(*) FROM app_audit_log) audits,
@@ -66,6 +67,8 @@ for f in 005_orgs_memberships 006_content 007_integrations_datasets 008_settings
 done
 # 010 only together with the M5 app release (see section 3)
 psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.sql.example
+# 011 (postgres, bypasses RLS; no secret in the file). After 010, once the M5 release is deployed or just before it:
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.sql.example
 ```
 **Set the three passwords by hand, right after 003b and 004** (as postgres, interactive; the password is not echoed, not logged, not in shell history):
 ```bash
@@ -153,7 +156,7 @@ SELECT relname, relrowsecurity AS rls, relforcerowsecurity AS forced FROM pg_cla
 -- 2. no tenant table with a nullable org_id (audit, settings, allowed_hosts are the documented exceptions)
 SELECT table_name, is_nullable FROM information_schema.columns
  WHERE column_name='org_id' AND table_name LIKE 'app\_%' ESCAPE '\' ORDER BY 1;
--- 3. policies (app_integrations has tenant_isolation + two RESTRICTIVE: cred_source_insert, cred_source_update)
+-- 3. policies (app_integrations has tenant_isolation + three RESTRICTIVE: cred_source_insert, cred_source_update (USING + WITH CHECK), cred_source_delete (USING))
 SELECT tablename, policyname, permissive, cmd FROM pg_policies WHERE schemaname='public' ORDER BY 1,2;
 SELECT pg_get_functiondef('app_is_platform()'::regprocedure);   -- body: SELECT current_user = 'portal_platform'
 SELECT count(*) FROM pg_proc WHERE proname='app_is_platform' AND prosrc ILIKE '%app.is_platform%';   -- 0 (no setting involved)
@@ -169,6 +172,9 @@ SELECT has_table_privilege('portal_app','worldrisk_tracking','SELECT') AS wr,
        has_column_privilege('portal_app','app_users','is_platform_admin','INSERT') AS plat_ins,
        has_table_privilege('portal_app','app_orgs','INSERT')           AS org_ins,
        has_table_privilege('portal_app','app_orgs','UPDATE')           AS org_upd,
+       has_table_privilege('portal_app','app_allowed_hosts','INSERT')  AS host_ins,
+       has_table_privilege('portal_app','app_allowed_hosts','UPDATE')  AS host_upd,
+       has_table_privilege('portal_app','app_allowed_hosts','DELETE')  AS host_del,
        has_column_privilege('portal_app','app_integrations','cred_ciphertext','SELECT') AS cred_sel,
        has_column_privilege('portal_app','app_integrations','cred_nonce','SELECT')      AS nonce_sel;   -- all false
 -- 5. privileges it must have (all true)
@@ -177,7 +183,8 @@ SELECT has_table_privilege('portal_app','app_users','SELECT'), has_table_privile
        has_column_privilege('portal_app','app_users','hashed_password','UPDATE'),
        has_column_privilege('portal_app','app_integrations','cred_key_id','SELECT'),
        has_column_privilege('portal_app','app_integrations','cred_ciphertext','UPDATE'),   -- write-only
-       has_function_privilege('portal_app','app_integration_credentials(uuid)','EXECUTE');
+       has_function_privilege('portal_app','app_integration_credentials(uuid)','EXECUTE'),
+       has_table_privilege('portal_app','app_allowed_hosts','SELECT');   -- true (SELECT only; writes are platform-only)
 -- 5b. portal_platform: exactly its list, nothing else (expect the 6 rows below and no other row)
 SELECT c.relname, string_agg(p.priv, ',' ORDER BY p.priv) AS privs
   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -213,13 +220,15 @@ Then run the behavioural smoke test again against the real roles' semantics in p
 
 - Deploy the M5 app release (`PORTAL_DATA=pg`, `withOrg`/`withUser`/`withPlatform`, `requireOrg`, per-org loadUser) in the same window as 010. Between 010 and that release the old app sees no project rows for builders/viewers and no audit rows (fails closed).
 - The release must set per transaction: `app.org_id` (withOrg) and `app.user_id` (org switcher, requireOrg, user settings). There is NO `app.is_platform` setting any more: `withPlatform()` must open its connection with `DATABASE_URL_PLATFORM` (login role `portal_platform`) and nothing else may use that URL. Audit inserts must not use `RETURNING` (non-platform callers cannot see org-less rows).
-- Integration credentials: the connector reads them only via `SELECT * FROM app_integration_credentials($1)` inside `withOrg`; list queries select named columns (never `SELECT *` on `app_integrations`; it fails for `portal_app` by design) and use `has_credentials`. An `env:` credential source can only be written as `portal_platform`, which has NO grant on `app_integrations` (see "Open points" below).
+- Integration credentials: the connector reads them only via `SELECT * FROM app_integration_credentials($1)` inside `withOrg`; list queries select named columns (never `SELECT *` on `app_integrations`; it fails for `portal_app` by design) and use `has_credentials`. `env:` integrations are created only by 011 (as `postgres`); `portal_app` can list them but UPDATE and DELETE touch 0 rows, and the app must show them read-only (see "Open points").
+- The host allowlist is read-only for `portal_app`; adding a host is a platform-path (`portal_platform`) action.
 - Existing sessions: roles come from memberships after the cut-over; check that no user gained access (compare the pre-010 `allowed_projects` per user with the new one).
 - Do not enter any real integration credential until the isolation matrix is green; do not create client logins before TOTP (R7 hardening).
 
 ## 4. Roll back (reverse order, each as its listed role; copy each `.down.sql.example` and run)
 
 ```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.down.sql.example   # first; deletes the 2 managed integrations (+ datasets on them) and the global localhost host
 psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.down.sql.example
 for f in 009_audit_backfill 008_settings 007_integrations_datasets 006_content 005_orgs_memberships; do
   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/$f.down.sql.example || break
@@ -228,6 +237,18 @@ sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_po
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/003b_portal_platform_role.down.sql.example  # after 010's rollback
 ```
 Verify: `\dt app_*` lists only `app_users`, `app_user_projects`, `app_audit_log`; `SELECT count(*) FROM pg_policies WHERE schemaname='public'` is 0; row counts equal the baseline; `portal_app` privileges equal the 003 set; `portal_platform` absent. Down files DROP data created after go-live (content, versions, integrations, settings, memberships): after real use the safe rollback is restoring the vzdump.
+
+## 4b. After 011 (as postgres)
+
+```sql
+SELECT host, port_min, port_max, org_id FROM app_allowed_hosts;      -- localhost 5432 5432 NULL
+SELECT o.slug, i.name, i.credential_source, i.relation_allowlist, i.host, i.port, i.database, i.ssl_mode, i.has_credentials, i.status
+  FROM app_integrations i JOIN app_orgs o ON o.id=i.org_id ORDER BY 1;
+  -- adars | ADARS tracking (managed) | env:DATABASE_URL_READONLY_ADARS | {adars_tracking} | localhost | 5432 | jaysnet_data | disable | f | active
+  -- worldrisk | WorldRisk tracking (managed) | env:DATABASE_URL_READONLY_WR | {worldrisk_tracking} | (same) ... | f | active
+SELECT count(*) FROM app_integrations WHERE cred_ciphertext IS NOT NULL OR cred_nonce IS NOT NULL;   -- 0
+```
+Re-run 011: both NOTICEs read `inserted 0`. As `portal_app` (psql, inside a transaction with `app.org_id` set to worldrisk): the env: row is listable; `UPDATE app_integrations SET name='x' WHERE credential_source LIKE 'env:%'` and the same `DELETE` report 0 rows. Do not rename the seeded integrations (a renamed row would be seeded again on a re-run).
 
 ## 5. After applying
 
@@ -241,12 +262,14 @@ Verify: `\dt app_*` lists only `app_users`, `app_user_projects`, `app_audit_log`
 `portal_test` only; never `jaysnet_data`. The file refuses to run elsewhere, runs inside one transaction and always ends with `ROLLBACK`.
 ```bash
 # one-time: setup_test_db.sql.example + 001, 005-009 + 010 with both -v roles (commands in the header of setup_test_db.sql.example)
-psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
-psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
+psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
+psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
 ```
-Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED`; no line starting `FAIL`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to `jaysnet_data`, send the output back.
+Apply 011 to `portal_test` first (`sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -f db/migrations/011_seed_managed_sources.sql.example`): it is the only way to create an `env:` row, and tests 535 to 538 (UPDATE and DELETE of an env: row touch 0 rows; other org cannot touch it) use it. Without it they print `SKIP`.
+New in this version, all as `portal_test_app`: 250 to 252 (INSERT, UPDATE, DELETE on `app_allowed_hosts` refused by privilege), 535 to 538 (env: row), 131 (no org-owned host rows without context; the global `localhost` row is readable by design); 412 now uses `RETURNING id` (a constant RETURNING does not trigger the SELECT policy).
+Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skipped` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED, 0 skipped`; no line starting `FAIL` or `SKIP`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to `jaysnet_data`, send the output back.
 
 ## 7. Open points (decide before the M5 release)
 
-- `portal_platform` has no grant on `app_integrations`, so nobody can create an `env:DATABASE_URL_READONLY_*` integration through the app: the restrictive policy lets only the platform role write one, and the owner (`jaysnet_admin`) is not the platform role. Until decided, such a row is created by `postgres` (BYPASSRLS) or by adding a platform grant on `app_integrations` in a later migration.
-- `portal_app` still holds INSERT/UPDATE/DELETE on `app_allowed_hosts`; RLS now always refuses those writes (only the platform role passes). Harmless, but a later migration may reduce it to SELECT.
+- `env:` integrations are created only by 011 (as `postgres`). `portal_platform` has no grant on `app_integrations` and the owner is not the platform role, so the app can neither create nor change them; adding a third managed source later means another seed file as `postgres` (or a deliberate platform grant). The app must render managed rows read-only.
+- `portal_app` is now `SELECT` only on `app_allowed_hosts`; adding a host needs the platform path (`portal_platform`, which keeps full DML there).

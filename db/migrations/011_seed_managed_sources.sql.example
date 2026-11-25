@@ -1,0 +1,78 @@
+-- 011_seed_managed_sources.sql.example
+-- Seeds the allowed host localhost:5432 and one MANAGED integration per organisation: the
+-- read-only connection the portal itself uses for that org's tracking table. No credential
+-- is stored: credential_source = 'env:DATABASE_URL_READONLY_<ORG>' names an environment variable
+-- that the app reads at connect time (the URL of portal_reader_wr / portal_reader_adars, 004).
+--
+--   WorldRisk  "WorldRisk tracking (managed)"  env:DATABASE_URL_READONLY_WR     {worldrisk_tracking}
+--   ADARS      "ADARS tracking (managed)"      env:DATABASE_URL_READONLY_ADARS  {adars_tracking}
+--   both: kind postgres, host localhost, port 5432, database jaysnet_data, ssl_mode 'disable'
+--         (loopback to the same host), status active, cred_* columns NULL.
+--   host: global row (org_id NULL), localhost ports 5432-5432.
+--
+-- RUN AS:  postgres (superuser), NOT jaysnet_admin. After 007 (tables) and, normally, after 010.
+--   WHY postgres: after 010 an env: integration can be created, changed or deleted only by the
+--   platform role (restrictive policies), the platform role has no grant on app_integrations,
+--   and the owner jaysnet_admin is subject to FORCE ROW LEVEL SECURITY and is not the platform
+--   role. A superuser bypasses RLS, so this is the one place where these rows are made. The file
+--   refuses to run as a role that does not bypass RLS.
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.sql.example
+--   (holds no secret, so the .example may be run directly.)
+-- The throwaway database too (it makes the env: smoke tests runnable):
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -f db/migrations/011_seed_managed_sources.sql.example
+--
+-- IDEMPOTENT: ON CONFLICT DO NOTHING on the host's unique key and on (org_id, lower(name)); a
+-- second run inserts 0 rows (the NOTICEs say so). A row you renamed or edited is left as is
+-- (its name no longer conflicts, so a renamed row would be seeded AGAIN: do not rename these).
+-- Touches only app_allowed_hosts and app_integrations. Never touches the tracking tables.
+--
+-- NOT DONE HERE: datasets over these integrations (the first two named datasets are a separate
+-- later file), and nothing about the reader roles' passwords or the .env variables.
+--
+-- CHECKS AFTER RUNNING (as postgres):
+--   SELECT host, port_min, port_max, org_id FROM app_allowed_hosts;                  -- localhost 5432 5432 NULL
+--   SELECT o.slug, i.name, i.credential_source, i.relation_allowlist, i.host, i.port, i.database, i.ssl_mode,
+--          i.has_credentials, i.cred_key_id IS NULL AS no_key, i.status
+--     FROM app_integrations i JOIN app_orgs o ON o.id = i.org_id ORDER BY 1;
+--     -- adars   | ADARS tracking (managed)     | env:DATABASE_URL_READONLY_ADARS | {adars_tracking}     | localhost | 5432 | jaysnet_data | disable | f | t | active
+--     -- worldrisk | WorldRisk tracking (managed) | env:DATABASE_URL_READONLY_WR  | {worldrisk_tracking} | ...same...
+--   SELECT count(*) FROM app_integrations WHERE cred_ciphertext IS NOT NULL OR cred_nonce IS NOT NULL;  -- 0
+--   Re-run the file: both NOTICEs read "inserted 0".
+--   As portal_app inside an org context the rows are listable but UPDATE/DELETE touch 0 rows (smoke tests 535-538).
+-- Rollback: 011_seed_managed_sources.down.sql.example
+
+BEGIN;
+
+DO $$
+BEGIN
+    IF NOT (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user) THEN
+        RAISE EXCEPTION '011: run as postgres (superuser/BYPASSRLS); current_user = %', current_user;
+    END IF;
+    IF (SELECT count(*) FROM app_orgs WHERE slug IN ('worldrisk', 'adars')) <> 2 THEN
+        RAISE EXCEPTION '011: organisations worldrisk and adars must exist (apply 005 first)';
+    END IF;
+END $$;
+
+DO $$
+DECLARE n bigint;
+BEGIN
+    INSERT INTO app_allowed_hosts (org_id, host, port_min, port_max, note)
+    VALUES (NULL, 'localhost', 5432, 5432, 'Managed local PostgreSQL (jaysnet_data)')
+    ON CONFLICT ON CONSTRAINT app_allowed_hosts_unique DO NOTHING;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE '011: allowed hosts inserted: %', n;
+
+    INSERT INTO app_integrations
+           (org_id, kind, name, host, port, database, ssl_mode, relation_allowlist, credential_source, status)
+    SELECT o.id, 'postgres', v.name, 'localhost', 5432, 'jaysnet_data', 'disable', v.relations, v.src, 'active'
+      FROM (VALUES
+              ('worldrisk', 'WorldRisk tracking (managed)', 'env:DATABASE_URL_READONLY_WR',    ARRAY['worldrisk_tracking']::text[]),
+              ('adars',     'ADARS tracking (managed)',     'env:DATABASE_URL_READONLY_ADARS', ARRAY['adars_tracking']::text[])
+           ) AS v(slug, name, src, relations)
+      JOIN app_orgs o ON o.slug = v.slug
+    ON CONFLICT (org_id, lower(name)) DO NOTHING;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE '011: managed integrations inserted: %', n;
+END $$;
+
+COMMIT;

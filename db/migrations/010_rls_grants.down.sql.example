@@ -4,6 +4,9 @@
 --   psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -f <this file>
 --   (-v platform_role is optional: default portal_platform. The role itself is dropped by 003b's down file.)
 --
+-- Every policy is dropped by the loop below, including the three RESTRICTIVE ones on
+-- app_integrations (cred_source_insert / _update / _delete); REVOKE ALL below also removes
+-- the new SELECT-only grant on app_allowed_hosts and the column-level grants on app_integrations.
 -- Restores table-wide INSERT/UPDATE on app_users (the 003 state). Does NOT undo the org_id
 -- values or the tables themselves (that is 009 .. 005). Revert the app to the pre-M5 release
 -- before or together with this, since withOrg() assumes RLS.
