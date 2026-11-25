@@ -3,11 +3,9 @@
 -- DATA LOSS: drops all integrations (including any stored ciphertext), datasets, fields
 -- and allowed hosts. Stored credentials are not recoverable from a rollback; re-enter them.
 -- CHECK AFTER: \dt app_*  -- none of app_allowed_hosts, app_integrations, app_datasets, app_dataset_fields
---              \dv app_*  -- no app_integrations_public
 
 BEGIN;
 
-DROP VIEW  IF EXISTS app_integrations_public;
 DROP TABLE IF EXISTS app_dataset_fields;
 DROP TABLE IF EXISTS app_datasets;
 DROP TABLE IF EXISTS app_integrations;

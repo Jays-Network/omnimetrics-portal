@@ -1,10 +1,13 @@
 -- 010_rls_grants.sql.example
--- Row-level security on every tenant table + least-privilege grants to portal_app.
+-- Row-level security on every tenant table + least-privilege grants to portal_app and
+-- portal_platform.
 -- PLAN_BUILDER sections 3.2 (item 6) and A.
 --
 -- RUN AS:  jaysnet_admin (the table owner).  After 005-009 (009 BEFORE this file).
 --   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.sql
---   Optional: -v app_role=<role>  (default portal_app; the throwaway test DB passes portal_test_app)
+--   Optional: -v app_role=<role>        (default portal_app)
+--             -v platform_role=<role>   (default portal_platform; created by 003b, NOT by this file)
+--   The throwaway test DB passes -v app_role=portal_test_app -v platform_role=portal_test_platform.
 -- Rollback: 010_rls_grants.down.sql.example
 --
 -- !! APP CUT-OVER WARNING. Once this file is applied, the CURRENT app code (loadUser reads
@@ -12,13 +15,16 @@
 -- org) behaves differently: a builder/viewer's project query returns ZERO rows until it
 -- runs inside withOrg() (fails closed: nobody sees more, some see nothing), and audit
 -- reads return nothing. Apply 010 together with the M5 app release that sets app.org_id /
--- app.user_id (withOrg / withUser / withPlatform), not before. Applying 005-009 alone is safe
--- for the current app.
+-- app.user_id (withOrg / withUser) and connects as the platform role for withPlatform
+-- (DATABASE_URL_PLATFORM), not before. Applying 005-009 alone is safe for the current app.
 --
 -- WHAT IT DOES
---  1. Helper functions app_current_org(), app_current_user(), app_is_platform(). They read the
---     transaction-local settings app.org_id, app.user_id, app.is_platform and return NULL /
---     false when unset.  NOTE: the plan's `current_setting('app.org_id', true)::uuid` is
+--  1. Helper functions app_current_org(), app_current_user(), app_is_platform(). The first two
+--     read the transaction-local settings app.org_id and app.user_id and return NULL when unset.
+--     app_is_platform() reads NO setting: it is `current_user = '<platform_role>'`, built from the
+--     psql variable with format(), so platform rights exist only on a connection that logged in
+--     as that role (inside a SECURITY DEFINER function current_user is the function owner, so it
+--     is false there). NOTE: the plan's `current_setting('app.org_id', true)::uuid` is
 --     wrapped in NULLIF(...,''): after a SET LOCAL transaction ends, a session that once set
 --     the setting reports '' (not NULL), and ''::uuid would raise an error instead of
 --     returning zero rows.
@@ -31,30 +37,44 @@
 --         any org, needed by requireOrg and the org switcher before an org is chosen) +
 --         "platform_all" (director)
 --       app_audit_log (org_id is NULL for platform events): SELECT own org's rows or, for the
---         platform path, everything; INSERT allowed with org_id NULL or the current org (login
---         events happen before any org exists); no UPDATE/DELETE policy and no grant
+--         platform role, everything; INSERT allowed with org_id NULL or the current org (login
+--         events happen before any org exists) AND user_id NULL or the current user (nobody logs
+--         an action as someone else; the platform role may log any); no UPDATE/DELETE policy and
+--         no grant.  NOTE: INSERT ... RETURNING on the audit log FAILS for non-platform callers
+--         when the new row is not visible to them under audit_select (e.g. org_id NULL), because
+--         RETURNING needs the SELECT policy to pass. The app inserts audit rows without RETURNING.
 --       app_settings (system/org/user scopes): per-scope policies; system rows are readable by
---         all, writable only on the platform path; user rows only by that user
---       app_allowed_hosts (org_id NULL = global): readable if global or own org; written only on
---         the platform path
+--         all, writable only by the platform role; user rows only by that user
+--       app_allowed_hosts (org_id NULL = global): readable if global or own org; written only by
+--         the platform role
+--       app_integrations: tenant policy + two RESTRICTIVE policies (INSERT, UPDATE): a
+--         credential_source other than 'stored' (an env: source) needs the platform role
 --     NOT row-secured, by design: app_users (login must read it before any context) and
 --     app_orgs (requireOrg resolves a slug before an org context exists). The generic
 --     assertion below fails the migration if any OTHER app_* table lacks FORCE RLS.
---  4. Least-privilege grants to portal_app (matrix at the bottom).
---  5. Assertions that abort (and roll back) the whole file if portal_app is a superuser, has
---     BYPASSRLS, owns an app object, or can read the tracking tables.
+--  4. Least-privilege grants to portal_app and portal_platform (matrix at the bottom).
+--     Secrets: portal_app has NO SELECT on app_integrations.cred_ciphertext / cred_nonce (so
+--     `SELECT *` on that table fails for it by design). The connector reads them only through
+--     app_integration_credentials(id): SECURITY DEFINER, owned by the migration role, returns
+--     the credential columns of ONE integration of the CURRENT org, EXECUTE for portal_app only.
+--  5. Assertions that abort (and roll back) the whole file if either role is a superuser, has
+--     BYPASSRLS, owns an app object, can read the tracking tables, can modify the audit log, or
+--     (portal_app) can read the secret columns; and that portal_platform holds nothing outside
+--     its list.
 --
--- THE `app.is_platform` SWITCH: it is a transaction-local setting that withPlatform() sets.
--- portal_app is the only application role, so this path is only as strong as the app code
--- (and the director-only guard in front of withPlatform). A stronger option is a second
--- login role (portal_platform) for that path; see the report to Jay.
+-- THE PLATFORM PATH is a second LOGIN role, not a switch. The role is created by
+-- 003b_portal_platform_role.sql.example (no password in the file; \password by hand), not here.
+-- A role name other than portal_platform must be passed as -v platform_role=<name> to THIS file
+-- (it is baked into app_is_platform() at creation) and to the down file.
 --
 -- HOW THE OWNER BEHAVES UNDER FORCE (jaysnet_admin owns the tables)
 --   * FORCE means the owner is subject to the policies like any role. Run as jaysnet_admin
 --     WITHOUT context, SELECT on a tenant table returns 0 rows and INSERT fails WITH CHECK.
 --   * The owner can still do maintenance deliberately: SELECT set_config('app.org_id','<uuid>',true)
---     inside a transaction (what 009 does for the backfill), or set app.is_platform='on' where a
---     platform policy exists. That keeps the "owner must opt in" property without a bypass.
+--     inside a transaction (what 009 does for the backfill). That keeps the "owner must opt in"
+--     property without a bypass. The owner is NOT the platform role: platform-only rows (system
+--     settings, global hosts, cross-org memberships) need postgres or a connection as the
+--     platform role. The same holds for app_integrations rows with an env: credential source.
 --   * DDL (ALTER/CREATE/DROP/GRANT, adding columns, migrations 011+) is NOT affected by RLS.
 --   * Roles that DO bypass RLS: superuser (postgres) and any BYPASSRLS role. Use postgres for
 --     emergency repair and for pg_dump of app_* tables.
@@ -64,7 +84,8 @@
 --     role). vzdump (whole-container) is unaffected. Check before applying (checklist pre-flight).
 --   * Grafana (grafana_reader) and the tracking tables are unaffected.
 --
--- CHECKS AFTER RUNNING (the checklist has the complete set):
+-- CHECKS AFTER RUNNING (the checklist has the complete set; db/test/smoke_m5.sql.example runs
+-- the behavioural tests in the throwaway database):
 --   SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 --     WHERE relname LIKE 'app\_%' ESCAPE '\' AND relkind='r' ORDER BY 1;   -- t/t for all but app_users, app_orgs
 --   SELECT tablename, policyname, cmd FROM pg_policies WHERE schemaname='public' ORDER BY 1,2;
@@ -74,18 +95,31 @@
 \else
     \set app_role portal_app
 \endif
+\if :{?platform_role}
+\else
+    \set platform_role portal_platform
+\endif
 
 BEGIN;
 
--- Make the role name available to DO blocks (psql variables do not expand inside $$).
-SELECT set_config('app.migr_role', :'app_role', true);
+-- Make the role names available to DO blocks (psql variables do not expand inside $$).
+-- (Migration-local settings, transaction-scoped; unrelated to app.org_id / app.user_id.)
+SELECT set_config('app.migr_role', :'app_role', true),
+       set_config('app.migr_platform_role', :'platform_role', true);
 
 -- ---- 0. pre-conditions ----------------------------------------------------
 DO $$
 DECLARE r text := current_setting('app.migr_role');
+        p text := current_setting('app.migr_platform_role');
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
         RAISE EXCEPTION '010: role % does not exist (apply 003 first)', r;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = p) THEN
+        RAISE EXCEPTION '010: platform role % does not exist (apply 003b first)', p;
+    END IF;
+    IF p = r THEN
+        RAISE EXCEPTION '010: app_role and platform_role must differ (both are %)', r;
     END IF;
     IF EXISTS (SELECT 1 FROM app_user_projects WHERE org_id IS NULL) THEN
         RAISE EXCEPTION '010: app_user_projects has rows without org_id; run 009 first';
@@ -101,9 +135,13 @@ CREATE FUNCTION app_current_user() RETURNS uuid
 LANGUAGE sql STABLE PARALLEL SAFE
 AS $$ SELECT NULLIF(current_setting('app.user_id', true), '')::uuid $$;
 
-CREATE FUNCTION app_is_platform() RETURNS boolean
-LANGUAGE sql STABLE PARALLEL SAFE
-AS $$ SELECT coalesce(current_setting('app.is_platform', true), '') = 'on' $$;
+-- Body is built with format() from the psql variable: `SELECT current_user = '<platform_role>'`.
+DO $$
+BEGIN
+    EXECUTE format(
+        'CREATE FUNCTION app_is_platform() RETURNS boolean LANGUAGE sql STABLE PARALLEL SAFE AS %L',
+        format('SELECT current_user = %L', current_setting('app.migr_platform_role')));
+END $$;
 
 -- ---- 2. org_id NOT NULL on the last nullable tenant column -------------------
 ALTER TABLE app_user_projects ALTER COLUMN org_id SET NOT NULL;
@@ -124,6 +162,14 @@ BEGIN
     END LOOP;
 END $$;
 
+-- integrations: only the platform role may write a non-'stored' (env:) credential source.
+-- RESTRICTIVE = AND-ed with the tenant policy. One policy per command (a policy has one).
+-- (007's CHECK already limits env: sources to env:DATABASE_URL_READONLY_*.)
+CREATE POLICY cred_source_insert ON app_integrations AS RESTRICTIVE FOR INSERT
+    WITH CHECK (credential_source = 'stored' OR app_is_platform());
+CREATE POLICY cred_source_update ON app_integrations AS RESTRICTIVE FOR UPDATE
+    WITH CHECK (credential_source = 'stored' OR app_is_platform());
+
 -- memberships
 ALTER TABLE app_memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_memberships FORCE ROW LEVEL SECURITY;
@@ -132,7 +178,7 @@ CREATE POLICY tenant_isolation ON app_memberships FOR ALL
 CREATE POLICY self_read ON app_memberships FOR SELECT
     USING (user_id = app_current_user());
 CREATE POLICY platform_all ON app_memberships FOR ALL
-    USING (app_is_platform()) WITH CHECK (app_is_platform());
+    USING (app_is_platform()) WITH CHECK (app_is_platform());   -- the platform role's table grant has no DELETE
 
 -- audit log
 ALTER TABLE app_audit_log ENABLE ROW LEVEL SECURITY;
@@ -140,7 +186,8 @@ ALTER TABLE app_audit_log FORCE ROW LEVEL SECURITY;
 CREATE POLICY audit_select ON app_audit_log FOR SELECT
     USING (org_id = app_current_org() OR app_is_platform());
 CREATE POLICY audit_insert ON app_audit_log FOR INSERT
-    WITH CHECK (org_id IS NULL OR org_id = app_current_org() OR app_is_platform());
+    WITH CHECK ((org_id IS NULL OR org_id = app_current_org() OR app_is_platform())
+            AND (user_id IS NULL OR user_id = app_current_user() OR app_is_platform()));
 
 -- settings
 ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
@@ -175,19 +222,21 @@ CREATE POLICY hosts_insert ON app_allowed_hosts FOR INSERT WITH CHECK (app_is_pl
 CREATE POLICY hosts_update ON app_allowed_hosts FOR UPDATE USING (app_is_platform()) WITH CHECK (app_is_platform());
 CREATE POLICY hosts_delete ON app_allowed_hosts FOR DELETE USING (app_is_platform());
 
--- ---- 4. grants to the application role ---------------------------------------
--- Start from a clean slate on the tables this file governs, then grant exactly what is needed.
-REVOKE ALL ON app_orgs, app_memberships, app_user_projects, app_content_nodes, app_dashboard_versions,
-              app_grants, app_allowed_hosts, app_integrations, app_integrations_public, app_datasets,
-              app_dataset_fields, app_settings
-    FROM :"app_role";
+-- ---- 4. grants -----------------------------------------------------------------
+-- Start from a clean slate on every app_* table for BOTH roles, then grant exactly what is needed.
+REVOKE ALL ON app_users, app_orgs, app_memberships, app_user_projects, app_content_nodes,
+              app_dashboard_versions, app_grants, app_allowed_hosts, app_integrations, app_datasets,
+              app_dataset_fields, app_settings, app_audit_log
+    FROM :"app_role", :"platform_role";
+REVOKE ALL ON SEQUENCE app_audit_log_id_seq FROM :"app_role", :"platform_role";
 
--- Organisations: read; the director creates/renames (app-level check). Never deleted.
-GRANT SELECT, INSERT, UPDATE ON app_orgs TO :"app_role";
+-- ===== portal_app (the tenant path) =====
+
+-- Organisations: read only. Creating/renaming organisations is the platform role's job.
+GRANT SELECT ON app_orgs TO :"app_role";
 
 -- Users: no DELETE (deactivate). INSERT/UPDATE only on named columns, so the application
 -- can never set is_platform_admin (nor id/created_at). New columns need an explicit grant.
-REVOKE INSERT, UPDATE ON app_users FROM :"app_role";
 GRANT SELECT ON app_users TO :"app_role";
 GRANT INSERT (username, email, hashed_password, role, is_active) ON app_users TO :"app_role";
 GRANT UPDATE (username, email, hashed_password, role, is_active, updated_at) ON app_users TO :"app_role";
@@ -207,36 +256,128 @@ GRANT SELECT, INSERT ON app_dashboard_versions TO :"app_role";
 -- Grants: add, change, revoke.
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_grants TO :"app_role";
 
--- Hosts (RLS limits writes to the platform path), integrations, datasets, fields, settings.
+-- Hosts (RLS: writes need the platform role, so these write grants can never succeed for
+-- portal_app; left as designed in 010 v1, see the report), datasets, fields, settings.
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_allowed_hosts TO :"app_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON app_integrations TO :"app_role";
-GRANT SELECT ON app_integrations_public TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_datasets TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_dataset_fields TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON app_settings TO :"app_role";
 
+-- Integrations: SELECT on every column EXCEPT cred_ciphertext and cred_nonce (the app can never
+-- read the secret back; the connector uses app_integration_credentials()). INSERT and UPDATE
+-- include the two secret columns (write-only). A column added later needs an explicit SELECT grant.
+GRANT SELECT (id, org_id, kind, name, host, port, database, ssl_mode, relation_allowlist,
+              credential_source, cred_key_id, has_credentials, status, rotated_at,
+              created_by, created_at, updated_at)
+    ON app_integrations TO :"app_role";
+GRANT INSERT, UPDATE, DELETE ON app_integrations TO :"app_role";
+GRANT INSERT (cred_ciphertext, cred_nonce), UPDATE (cred_ciphertext, cred_nonce)
+    ON app_integrations TO :"app_role";    -- already covered by the table-level grant; kept to state the intent
+
 -- Audit: append-only for the application: SELECT and INSERT; NO UPDATE, NO DELETE, NO TRUNCATE.
-REVOKE ALL ON app_audit_log FROM :"app_role";
 GRANT SELECT, INSERT ON app_audit_log TO :"app_role";
 GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq TO :"app_role";
+
+-- The only reader of the secret columns: ONE integration of the CURRENT organisation.
+-- SECURITY DEFINER, owned by whoever runs this file (the table owner; FORCE RLS still applies
+-- to it, and the explicit org filter repeats the tenant policy). search_path is pinned and every
+-- object is schema-qualified. EXECUTE: portal_app only (not PUBLIC, not the platform role).
+CREATE FUNCTION app_integration_credentials(p_id uuid)
+RETURNS TABLE (cred_ciphertext bytea, cred_nonce bytea, cred_key_id text, credential_source text)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    SELECT i.cred_ciphertext, i.cred_nonce, i.cred_key_id, i.credential_source
+      FROM public.app_integrations i
+     WHERE i.id = p_id AND i.org_id = public.app_current_org()
+$$;
+REVOKE EXECUTE ON FUNCTION app_integration_credentials(uuid) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION app_integration_credentials(uuid) TO :"app_role";
+
+-- ===== portal_platform (the director path; nothing else is granted) =====
+GRANT SELECT, INSERT, UPDATE         ON app_orgs        TO :"platform_role";
+GRANT SELECT, INSERT, UPDATE         ON app_memberships TO :"platform_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON app_allowed_hosts TO :"platform_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON app_settings    TO :"platform_role";
+GRANT SELECT, INSERT                 ON app_audit_log   TO :"platform_role";
+GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq    TO :"platform_role";
 
 -- ---- 5. assertions: abort the whole migration if the security model does not hold ----
 DO $$
 DECLARE
-    r   text := current_setting('app.migr_role');
+    ra  text := current_setting('app.migr_role');
+    rp  text := current_setting('app.migr_platform_role');
+    r   text;
     bad text;
+    rec record;
 BEGIN
-    -- the app role is not a superuser, has no BYPASSRLS, is not a member of a superuser role
-    SELECT string_agg(rolname, ',') INTO bad FROM pg_roles WHERE rolname = r AND (rolsuper OR rolbypassrls OR rolcreaterole);
-    IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % is superuser/BYPASSRLS/CREATEROLE', bad; END IF;
+    -- both roles: not a superuser, no BYPASSRLS, no CREATEROLE; own nothing; cannot read tracking
+    -- data; cannot modify the audit log or the dashboard versions; cannot write is_platform_admin
+    FOREACH r IN ARRAY ARRAY[ra, rp] LOOP
+        SELECT string_agg(rolname, ',') INTO bad FROM pg_roles WHERE rolname = r AND (rolsuper OR rolbypassrls OR rolcreaterole);
+        IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % is superuser/BYPASSRLS/CREATEROLE', bad; END IF;
 
-    -- the app role owns nothing in public (tables, views, functions, sequences)
-    SELECT string_agg(c.relname, ',') INTO bad FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = r);
-    IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % owns relations: %', r, bad; END IF;
-    SELECT string_agg(p.proname, ',') INTO bad FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'public' AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = r);
-    IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % owns functions: %', r, bad; END IF;
+        SELECT string_agg(c.relname, ',') INTO bad FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = r);
+        IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % owns relations: %', r, bad; END IF;
+        SELECT string_agg(p.proname, ',') INTO bad FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = r);
+        IF bad IS NOT NULL THEN RAISE EXCEPTION '010: % owns functions: %', r, bad; END IF;
+
+        IF has_table_privilege(r, 'app_audit_log', 'UPDATE') OR has_table_privilege(r, 'app_audit_log', 'DELETE')
+           OR has_table_privilege(r, 'app_audit_log', 'TRUNCATE') THEN
+            RAISE EXCEPTION '010: % can modify the audit log', r;
+        END IF;
+        IF has_table_privilege(r, 'app_dashboard_versions', 'UPDATE') OR has_table_privilege(r, 'app_dashboard_versions', 'DELETE')
+           OR has_table_privilege(r, 'app_dashboard_versions', 'TRUNCATE') THEN
+            RAISE EXCEPTION '010: % can modify dashboard versions', r;
+        END IF;
+        IF has_column_privilege(r, 'app_users', 'is_platform_admin', 'UPDATE') OR has_column_privilege(r, 'app_users', 'is_platform_admin', 'INSERT') THEN
+            RAISE EXCEPTION '010: % can write app_users.is_platform_admin', r;
+        END IF;
+
+        -- no access to tracking data (the tables are absent in the throwaway test database)
+        IF to_regclass('public.worldrisk_tracking') IS NOT NULL AND has_table_privilege(r, 'public.worldrisk_tracking', 'SELECT') THEN
+            RAISE EXCEPTION '010: % can read worldrisk_tracking', r;
+        END IF;
+        IF to_regclass('public.adars_tracking') IS NOT NULL AND has_table_privilege(r, 'public.adars_tracking', 'SELECT') THEN
+            RAISE EXCEPTION '010: % can read adars_tracking', r;
+        END IF;
+
+        -- the secret columns are unreadable for both (column privilege OR table privilege)
+        IF has_column_privilege(r, 'app_integrations', 'cred_ciphertext', 'SELECT')
+           OR has_column_privilege(r, 'app_integrations', 'cred_nonce', 'SELECT') THEN
+            RAISE EXCEPTION '010: % can SELECT app_integrations.cred_ciphertext / cred_nonce', r;
+        END IF;
+    END LOOP;
+
+    -- portal_app: the non-secret integration columns stay readable; it may run the credential function
+    IF NOT has_column_privilege(ra, 'app_integrations', 'cred_key_id', 'SELECT')
+       OR NOT has_column_privilege(ra, 'app_integrations', 'has_credentials', 'SELECT') THEN
+        RAISE EXCEPTION '010: % cannot SELECT the non-secret integration columns', ra;
+    END IF;
+    IF NOT has_function_privilege(ra, 'app_integration_credentials(uuid)', 'EXECUTE')
+       OR has_function_privilege(rp, 'app_integration_credentials(uuid)', 'EXECUTE') THEN
+        RAISE EXCEPTION '010: EXECUTE on app_integration_credentials must be held by % only', ra;
+    END IF;
+    -- portal_app cannot write organisations
+    IF has_table_privilege(ra, 'app_orgs', 'INSERT') OR has_table_privilege(ra, 'app_orgs', 'UPDATE')
+       OR has_table_privilege(ra, 'app_orgs', 'DELETE') THEN
+        RAISE EXCEPTION '010: % can write app_orgs', ra;
+    END IF;
+
+    -- portal_platform: nothing outside its list (any other app_* table: no privilege of any kind)
+    FOR rec IN SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND c.relname LIKE 'app\_%' ESCAPE '\'
+                AND c.relname NOT IN ('app_orgs', 'app_memberships', 'app_allowed_hosts', 'app_settings', 'app_audit_log') LOOP
+        IF has_table_privilege(rp, rec.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+           OR has_any_column_privilege(rp, rec.oid, 'SELECT,INSERT,UPDATE,REFERENCES') THEN
+            RAISE EXCEPTION '010: % holds a privilege on %', rp, rec.relname;
+        END IF;
+    END LOOP;
+    IF has_table_privilege(rp, 'app_orgs', 'DELETE') OR has_table_privilege(rp, 'app_memberships', 'DELETE') THEN
+        RAISE EXCEPTION '010: % can DELETE organisations or memberships', rp;
+    END IF;
 
     -- every app_* table except app_users/app_orgs has RLS enabled AND forced
     SELECT string_agg(c.relname, ',') INTO bad FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -252,42 +393,25 @@ BEGIN
       WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns
                          WHERE table_schema = 'public' AND table_name = t AND column_name = 'org_id' AND is_nullable = 'NO');
     IF bad IS NOT NULL THEN RAISE EXCEPTION '010: org_id is nullable on: %', bad; END IF;
-
-    -- least privilege that must hold
-    IF has_table_privilege(r, 'app_audit_log', 'UPDATE') OR has_table_privilege(r, 'app_audit_log', 'DELETE')
-       OR has_table_privilege(r, 'app_audit_log', 'TRUNCATE') THEN
-        RAISE EXCEPTION '010: % can modify the audit log', r;
-    END IF;
-    IF has_table_privilege(r, 'app_dashboard_versions', 'UPDATE') OR has_table_privilege(r, 'app_dashboard_versions', 'DELETE') THEN
-        RAISE EXCEPTION '010: % can modify dashboard versions', r;
-    END IF;
-    IF has_column_privilege(r, 'app_users', 'is_platform_admin', 'UPDATE') OR has_column_privilege(r, 'app_users', 'is_platform_admin', 'INSERT') THEN
-        RAISE EXCEPTION '010: % can write app_users.is_platform_admin', r;
-    END IF;
-
-    -- no access to tracking data (the tables are absent in the throwaway test database)
-    IF to_regclass('public.worldrisk_tracking') IS NOT NULL AND has_table_privilege(r, 'public.worldrisk_tracking', 'SELECT') THEN
-        RAISE EXCEPTION '010: % can read worldrisk_tracking', r;
-    END IF;
-    IF to_regclass('public.adars_tracking') IS NOT NULL AND has_table_privilege(r, 'public.adars_tracking', 'SELECT') THEN
-        RAISE EXCEPTION '010: % can read adars_tracking', r;
-    END IF;
 END $$;
 
 COMMIT;
 
--- GRANT MATRIX (portal_app)               S  I  U  D
---   app_orgs                              x  x  x
---   app_users (columns: see above)        x  c  c            c = column-level; never is_platform_admin
---   app_memberships                       x  x  x
+-- GRANT MATRIX                            portal_app          portal_platform
+--                                         S  I  U  D          S  I  U  D
+--   app_orgs                              x                   x  x  x
+--   app_users (columns: see above)        x  c  c
+--   app_memberships                       x  x  x             x  x  x
 --   app_user_projects                     x  x     x
---   app_content_nodes                     x  x  x            soft delete only
---   app_dashboard_versions                x  x               append-only
+--   app_content_nodes                     x  x  x
+--   app_dashboard_versions                x  x                (append-only)
 --   app_grants                            x  x  x  x
---   app_allowed_hosts                     x  x  x  x         writes need app.is_platform
---   app_integrations                      x  x  x  x
---   app_integrations_public (view)        x
+--   app_allowed_hosts                     x  x  x  x          x  x  x  x      app: writes denied by RLS
+--   app_integrations                      c  x  x  x          (none)          app: SELECT on all columns
+--                                                                              except cred_ciphertext, cred_nonce
 --   app_datasets / app_dataset_fields     x  x  x  x
---   app_settings                          x  x  x  x
---   app_audit_log (+ sequence)            x  x               append-only
---   worldrisk_tracking, adars_tracking    no access at all
+--   app_settings                          x  x  x  x          x  x  x  x
+--   app_audit_log (+ sequence)            x  x                x  x            append-only
+--   app_integration_credentials(uuid)     EXECUTE             (none)
+--   worldrisk_tracking, adars_tracking    no access at all    no access at all
+--   c = column-level.  Never granted to either role: is_platform_admin, TRUNCATE, any DDL.

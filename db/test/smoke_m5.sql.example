@@ -1,0 +1,303 @@
+-- smoke_m5.sql.example
+-- Behavioural smoke test of migrations 005-010 in the THROWAWAY database portal_test.
+-- Run by Jay, twice, once per role (the file detects which one it is and runs that role's tests):
+--   psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
+--   psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|passed'
+-- (drop the grep to see every PASS line; results arrive as NOTICEs.)
+--
+-- EVERYTHING RUNS INSIDE ONE TRANSACTION THAT ENDS WITH ROLLBACK. Nothing persists. The file
+-- refuses to run unless current_database() = 'portal_test'. Never run it against jaysnet_data.
+-- Prerequisite: setup_test_db.sql.example applied, then 001 and 005-010 (see its header). The
+-- database must be empty of app data (fresh): the "no context returns 0 rows" checks assume it.
+--
+-- EXPECTED RESULT: the last line reads "smoke_m5 (<role>): N passed, 0 FAILED" and no line starts
+-- with FAIL. Each test below states its expected outcome in the table of tests: "ERR:<regex>" = the
+-- statement must raise an error whose message matches the regex; "OK" = must succeed; anything
+-- else = the single value the statement must return. A test that unexpectedly SUCCEEDS is rolled
+-- back by the harness before the next one. Session context (app.org_id / app.user_id) is set by
+-- the harness per test: ctx a / b = org+user A / B, a_user_only = no org, user A, none = nothing.
+--
+-- WHAT IS COVERED
+--  as portal_test_app (100-999):
+--    tenant isolation on every tenant table (own rows visible; org B rows invisible; INSERT and
+--    UPDATE into org B refused; UPDATE/DELETE of org B rows touch 0 rows); no context = 0 rows
+--    everywhere; content depth 8 ok / 9 rejected; a move that would exceed depth rejected; a move
+--    within limits propagates depth to descendants (the pg_trigger_depth path); cycle rejected;
+--    dashboard cannot be a parent; cross-org parent rejected; direct UPDATE of depth rejected;
+--    versions UPDATE/DELETE/TRUNCATE rejected; 1 MiB spec cap; audit UPDATE/DELETE/TRUNCATE denied,
+--    audit user_id forgery refused, INSERT ... RETURNING refused for an invisible row; no write to
+--    is_platform_admin; no SELECT of cred_ciphertext / cred_nonce (also via SELECT *); credential
+--    function works only in the owning org; env: integrations refused (JWT_SECRET by CHECK,
+--    env:DATABASE_URL_READONLY_* by the restrictive policy, INSERT and UPDATE); org writes denied;
+--    settings: org and own-user scope writable, system scope and another user's scope not.
+--  as portal_test_platform (700-999): app_is_platform() true; org insert/update ok, delete denied;
+--    memberships reachable without org context (INSERT reaches the FK, not RLS), no DELETE; hosts and
+--    system settings fully writable; audit insert + RETURNING ok, never UPDATE/DELETE/TRUNCATE; no
+--    access to app_users or any content/integration table; no EXECUTE on the credential function.
+--
+-- KNOWN LIMITS: the platform run cannot create users (it has no grant on app_users), so its
+-- membership test proves the policy lets the INSERT through (it fails on the user FK, not RLS) rather
+-- than reading back a row. The tracking tables do not exist in portal_test, so "cannot read tracking
+-- tables" is asserted inside 010 itself only when they exist (checklist step covers jaysnet_data).
+
+SELECT current_database() = 'portal_test' AS in_test_db,
+       current_user = 'portal_test_platform' AS is_plat \gset
+\if :in_test_db
+\else
+    \echo 'REFUSING: not connected to portal_test.'
+    \quit
+\endif
+
+BEGIN;
+
+-- ---------------------------------------------------------------------------
+-- Fixtures (portal_test_app only): two orgs (the seeded worldrisk = A, adars = B), one user and
+-- one membership per org, and a row in every tenant table of both orgs; plus a 7-level folder
+-- chain L1..L7 and a root folder S1 with child S2 in org A. Ids go into smoke.* settings.
+-- ---------------------------------------------------------------------------
+\if :is_plat
+\else
+DO $smoke$
+DECLARE
+    tag text; o uuid; u uuid; f uuid; d uuid; i uuid; ic uuid; ds uuid; k int;
+BEGIN
+    FOREACH tag IN ARRAY ARRAY['a', 'b'] LOOP
+        SELECT id INTO o FROM app_orgs WHERE slug = CASE tag WHEN 'a' THEN 'worldrisk' ELSE 'adars' END;
+        IF o IS NULL THEN RAISE EXCEPTION 'smoke fixtures: seeded organisation missing (apply 005)'; END IF;
+        INSERT INTO app_users (username, email, hashed_password, role)
+             VALUES ('smoke_' || tag, 'smoke_' || tag || '@example.test', 'x', 'admin') RETURNING id INTO u;
+        PERFORM set_config('app.org_id', o::text, true);
+        PERFORM set_config('app.user_id', u::text, true);
+        PERFORM set_config('smoke.org_' || tag, o::text, true);
+        PERFORM set_config('smoke.user_' || tag, u::text, true);
+
+        INSERT INTO app_memberships (org_id, user_id, role) VALUES (o, u, 'admin');
+        INSERT INTO app_user_projects (org_id, user_id, folder_name) VALUES (o, u, 'FQM Tracking Sheets');
+        INSERT INTO app_content_nodes (org_id, kind, name) VALUES (o, 'folder', 'root') RETURNING id INTO f;
+        INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (o, f, 'dashboard', 'dash') RETURNING id INTO d;
+        INSERT INTO app_dashboard_versions (org_id, node_id, version, spec) VALUES (o, d, 1, '{}');
+        INSERT INTO app_grants (org_id, user_id, node_id, access) VALUES (o, u, f, 'edit');
+        INSERT INTO app_integrations (org_id, kind, name, host, port, database)
+             VALUES (o, 'postgres', 'plain', 'localhost', 5432, 'x') RETURNING id INTO i;
+        INSERT INTO app_integrations (org_id, kind, name, host, port, database, cred_ciphertext, cred_nonce, cred_key_id)
+             VALUES (o, 'postgres', 'with cred', 'localhost', 5432, 'x', '\xdeadbeef'::bytea,
+                     decode('000102030405060708090a0b', 'hex'), 'smoke-key') RETURNING id INTO ic;
+        INSERT INTO app_datasets (org_id, integration_id, key, label, relation) VALUES (o, i, 'ds', 'DS', 'some_table') RETURNING id INTO ds;
+        INSERT INTO app_dataset_fields (org_id, dataset_id, column_name, label, type) VALUES (o, ds, 'c', 'C', 'text');
+        INSERT INTO app_settings (scope, org_id, key, value) VALUES ('org', o, 'language', '"en"');
+
+        PERFORM set_config('smoke.' || tag || '_folder', f::text, true);
+        PERFORM set_config('smoke.' || tag || '_dash', d::text, true);
+        PERFORM set_config('smoke.' || tag || '_integ', i::text, true);
+        PERFORM set_config('smoke.' || tag || '_integ_cred', ic::text, true);
+
+        IF tag = 'a' THEN
+            f := NULL;
+            FOR k IN 1..7 LOOP
+                INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (o, f, 'folder', 'L' || k) RETURNING id INTO f;
+            END LOOP;
+            INSERT INTO app_content_nodes (org_id, kind, name) VALUES (o, 'folder', 'S1') RETURNING id INTO f;
+            INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (o, f, 'folder', 'S2');
+        END IF;
+    END LOOP;
+END
+$smoke$;
+\endif
+
+-- ---------------------------------------------------------------------------
+-- The tests. Tokens {org_a} {org_b} {user_a} {user_b} {a_folder} {a_dash} {a_integ} {a_integ_cred}
+-- {b_folder} {b_dash} {b_integ} are replaced by quoted literals; {T} by each table of the named set.
+-- ---------------------------------------------------------------------------
+DO $smoke$
+DECLARE
+    kind text := CASE current_user WHEN 'portal_test_app' THEN 'app' WHEN 'portal_test_platform' THEN 'platform' END;
+    tok  text;
+    t    record;
+    q    text;
+    got  text;
+    err  text;
+    ok   boolean;
+    pass int := 0;
+    fail int := 0;
+BEGIN
+    IF kind IS NULL THEN
+        RAISE EXCEPTION 'smoke_m5: run as portal_test_app or portal_test_platform (current_user = %)', current_user;
+    END IF;
+
+    FOR t IN
+        WITH sets AS (
+            SELECT ARRAY['app_memberships','app_user_projects','app_content_nodes','app_dashboard_versions',
+                         'app_grants','app_integrations','app_datasets','app_dataset_fields','app_settings'] AS tenant,
+                   ARRAY['app_memberships','app_content_nodes','app_grants','app_integrations',
+                         'app_datasets','app_dataset_fields','app_settings'] AS upd,
+                   ARRAY['app_user_projects','app_grants','app_integrations','app_datasets',
+                         'app_dataset_fields','app_settings'] AS del,
+                   ARRAY['app_memberships','app_user_projects','app_content_nodes','app_dashboard_versions',
+                         'app_grants','app_integrations','app_datasets','app_dataset_fields','app_settings',
+                         'app_audit_log','app_allowed_hosts'] AS allt,
+                   ARRAY['app_user_projects','app_content_nodes','app_dashboard_versions','app_grants',
+                         'app_integrations','app_datasets','app_dataset_fields'] AS denied
+        ),
+        tests (n, who, ctx, label, sql, expect, tbls) AS (VALUES
+          -- ===== 1xx: tenant isolation, reads ====================================================
+          (100, 'app', 'a',    'own rows visible in {T}',        $q$SELECT (count(*) > 0)::text FROM {T} WHERE org_id = {org_a}$q$, 'true', 'tenant'),
+          (110, 'app', 'a',    'org B rows invisible in {T}',    $q$SELECT count(*)::text FROM {T} WHERE org_id = {org_b}$q$, '0', 'tenant'),
+          (120, 'app', 'b',    'org A rows invisible in {T}',    $q$SELECT count(*)::text FROM {T} WHERE org_id = {org_a}$q$, '0', 'tenant'),
+          (130, 'app', 'none', 'no context: 0 rows in {T}',      $q$SELECT count(*)::text FROM {T}$q$, '0', 'allt'),
+          (140, 'app', 'a_user_only', 'no org, user A: only own membership (self_read)', $q$SELECT count(*)::text FROM app_memberships$q$, '1', NULL),
+          (141, 'app', 'a_user_only', 'no org: content still invisible', $q$SELECT count(*)::text FROM app_content_nodes$q$, '0', NULL),
+          -- ===== 2xx: tenant isolation, writes into org B from context A ==========================
+          (200, 'app', 'a', 'INSERT into org B: memberships',      $q$INSERT INTO app_memberships (org_id, user_id, role) VALUES ({org_b}, {user_a}, 'viewer')$q$, 'ERR:row-level security', NULL),
+          (201, 'app', 'a', 'INSERT into org B: user_projects',    $q$INSERT INTO app_user_projects (org_id, user_id, folder_name) VALUES ({org_b}, {user_b}, 'x')$q$, 'ERR:row-level security', NULL),
+          (202, 'app', 'a', 'INSERT into org B: content_nodes',    $q$INSERT INTO app_content_nodes (org_id, kind, name) VALUES ({org_b}, 'folder', 'x')$q$, 'ERR:row-level security', NULL),
+          (203, 'app', 'a', 'INSERT into org B: dashboard_versions', $q$INSERT INTO app_dashboard_versions (org_id, node_id, version, spec) VALUES ({org_b}, {b_dash}, 2, '{}')$q$, 'ERR:row-level security', NULL),
+          (204, 'app', 'a', 'INSERT into org B: grants',           $q$INSERT INTO app_grants (org_id, user_id, node_id, access) VALUES ({org_b}, {user_b}, {b_folder}, 'view')$q$, 'ERR:row-level security', NULL),
+          (205, 'app', 'a', 'INSERT into org B: integrations',     $q$INSERT INTO app_integrations (org_id, kind, name, host, port, database) VALUES ({org_b}, 'postgres', 'x', 'h', 1, 'd')$q$, 'ERR:row-level security', NULL),
+          (206, 'app', 'a', 'INSERT into org B: datasets',         $q$INSERT INTO app_datasets (org_id, integration_id, key, label, relation) VALUES ({org_b}, {b_integ}, 'k2', 'K', 't')$q$, 'ERR:row-level security', NULL),
+          (207, 'app', 'a', 'INSERT into org B: dataset_fields',   $q$INSERT INTO app_dataset_fields (org_id, dataset_id, column_name, label, type) SELECT {org_b}::uuid, id, 'c2', 'C', 'text' FROM app_datasets WHERE org_id = {org_a} LIMIT 1$q$, 'ERR:row-level security', NULL),
+          (208, 'app', 'a', 'INSERT into org B: settings',         $q$INSERT INTO app_settings (scope, org_id, key, value) VALUES ('org', {org_b}, 'timeZone', '"UTC"')$q$, 'ERR:row-level security', NULL),
+          (209, 'app', 'a', 'INSERT into org B: audit_log',        $q$INSERT INTO app_audit_log (org_id, action) VALUES ({org_b}, 'x')$q$, 'ERR:row-level security', NULL),
+          (210, 'app', 'a', 'UPDATE moving an org A row to org B: {T}', $q$UPDATE {T} SET org_id = {org_b} WHERE org_id = {org_a}$q$, 'ERR:(row-level security|immutable)', 'upd'),
+          (220, 'app', 'a', 'UPDATE of org B rows touches 0 rows: {T}', $q$WITH u AS (UPDATE {T} SET org_id = org_id WHERE org_id = {org_b} RETURNING 1) SELECT count(*)::text FROM u$q$, '0', 'upd'),
+          (230, 'app', 'a', 'DELETE of org B rows touches 0 rows: {T}', $q$WITH d AS (DELETE FROM {T} WHERE org_id = {org_b} RETURNING 1) SELECT count(*)::text FROM d$q$, '0', 'del'),
+          (240, 'app', 'b', 'mirror: org B context cannot touch org A grants', $q$WITH d AS (DELETE FROM app_grants WHERE org_id = {org_a} RETURNING 1) SELECT count(*)::text FROM d$q$, '0', NULL),
+          -- ===== 3xx: content tree ================================================================
+          (300, 'app', 'a', 'depth 8 accepted (L8 under L7)', $q$WITH i AS (INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L7'), 'folder', 'L8') RETURNING depth) SELECT depth::text FROM i$q$, '8', NULL),
+          (310, 'app', 'a', 'depth 9 rejected (child of L8)',  $q$INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L8'), 'folder', 'L9')$q$, 'ERR:maximum nesting depth', NULL),
+          (320, 'app', 'a', 'move exceeding depth rejected (S1 with child S2 under L7: S2 would be 9)', $q$UPDATE app_content_nodes SET parent_id = (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L7') WHERE org_id = app_current_org() AND name = 'S1'$q$, 'ERR:maximum nesting depth', NULL),
+          (330, 'app', 'a', 'move within the limit accepted (S1 under L6 -> depth 7)', $q$WITH u AS (UPDATE app_content_nodes SET parent_id = (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L6') WHERE org_id = app_current_org() AND name = 'S1' RETURNING depth) SELECT depth::text FROM u$q$, '7', NULL),
+          (331, 'app', 'a', 'descendant depth propagated by the after-move trigger (S2 -> 8)', $q$SELECT depth::text FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'S2'$q$, '8', NULL),
+          (340, 'app', 'a', 'cycle rejected (L1 under its own descendant L8)', $q$UPDATE app_content_nodes SET parent_id = (SELECT id FROM app_content_nodes WHERE org_id = app_current_org() AND name = 'L8') WHERE org_id = app_current_org() AND name = 'L1'$q$, 'ERR:moved under itself', NULL),
+          (350, 'app', 'a', 'a dashboard cannot be a parent', $q$INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), {a_dash}, 'folder', 'under dash')$q$, 'ERR:parent must be a folder', NULL),
+          (360, 'app', 'a', 'cross-org parent rejected (parent is an org B folder)', $q$INSERT INTO app_content_nodes (org_id, parent_id, kind, name) VALUES (app_current_org(), {b_folder}, 'folder', 'x-org')$q$, 'ERR:parent not found in this organisation', NULL),
+          (370, 'app', 'a', 'direct UPDATE of depth rejected', $q$UPDATE app_content_nodes SET depth = 3 WHERE id = {a_folder}$q$, 'ERR:depth is maintained by the database', NULL),
+          (371, 'app', 'a', 'org_id of a node is immutable',  $q$UPDATE app_content_nodes SET org_id = {org_b} WHERE id = {a_folder}$q$, 'ERR:(immutable|row-level security)', NULL),
+          (380, 'app', 'a', 'version 2 appended',             $q$WITH i AS (INSERT INTO app_dashboard_versions (org_id, node_id, version, spec) VALUES (app_current_org(), {a_dash}, 2, '{"v":2}') RETURNING 1) SELECT count(*)::text FROM i$q$, '1', NULL),
+          (381, 'app', 'a', 'version UPDATE rejected',        $q$UPDATE app_dashboard_versions SET note = 'x' WHERE org_id = app_current_org()$q$, 'ERR:(permission denied|append-only)', NULL),
+          (382, 'app', 'a', 'version DELETE rejected',        $q$DELETE FROM app_dashboard_versions WHERE org_id = app_current_org()$q$, 'ERR:(permission denied|append-only)', NULL),
+          (383, 'app', 'a', 'version TRUNCATE rejected',      $q$TRUNCATE app_dashboard_versions$q$, 'ERR:(permission denied|append-only)', NULL),
+          (390, 'app', 'a', 'spec over 1 MiB rejected',       $q$INSERT INTO app_dashboard_versions (org_id, node_id, version, spec) VALUES (app_current_org(), {a_dash}, 3, jsonb_build_object('pad', repeat('x', 1100000)))$q$, 'ERR:spec_size', NULL),
+          -- ===== 4xx: audit log ===================================================================
+          (400, 'app', 'a', 'audit UPDATE denied',            $q$UPDATE app_audit_log SET action = 'x'$q$, 'ERR:permission denied', NULL),
+          (401, 'app', 'a', 'audit DELETE denied',            $q$DELETE FROM app_audit_log$q$, 'ERR:permission denied', NULL),
+          (402, 'app', 'a', 'audit TRUNCATE denied',          $q$TRUNCATE app_audit_log$q$, 'ERR:permission denied', NULL),
+          (410, 'app', 'a', 'audit insert as the current user and org', $q$WITH i AS (INSERT INTO app_audit_log (org_id, user_id, action) VALUES (app_current_org(), app_current_user(), 'smoke') RETURNING 1) SELECT count(*)::text FROM i$q$, '1', NULL),
+          (411, 'app', 'none', 'audit insert with no org and no user (login event) is allowed', $q$INSERT INTO app_audit_log (action) VALUES ('smoke-login')$q$, 'OK', NULL),
+          (412, 'app', 'none', 'same insert WITH RETURNING fails: the new row is not visible to the caller', $q$INSERT INTO app_audit_log (action) VALUES ('smoke-login2') RETURNING 1$q$, 'ERR:row-level security', NULL),
+          (413, 'app', 'a', 'audit insert as ANOTHER user refused', $q$INSERT INTO app_audit_log (org_id, user_id, action) VALUES (app_current_org(), {user_b}, 'forged')$q$, 'ERR:row-level security', NULL),
+          (414, 'app', 'a', 'audit row visible to its own org', $q$SELECT count(*)::text FROM app_audit_log WHERE action = 'smoke'$q$, '1', NULL),
+          (415, 'app', 'b', 'audit row invisible to the other org', $q$SELECT count(*)::text FROM app_audit_log WHERE action = 'smoke'$q$, '0', NULL),
+          -- ===== 5xx: users, orgs, secrets, integrations ==========================================
+          (500, 'app', 'a', 'cannot UPDATE is_platform_admin', $q$UPDATE app_users SET is_platform_admin = true WHERE id = {user_a}$q$, 'ERR:permission denied', NULL),
+          (501, 'app', 'a', 'cannot INSERT is_platform_admin',  $q$INSERT INTO app_users (username, email, hashed_password, is_platform_admin) VALUES ('smoke_x', 'x@example.test', 'h', true)$q$, 'ERR:permission denied', NULL),
+          (502, 'app', 'a', 'org INSERT denied',  $q$INSERT INTO app_orgs (slug, name) VALUES ('smoke-x', 'Smoke X')$q$, 'ERR:permission denied', NULL),
+          (503, 'app', 'a', 'org UPDATE denied',  $q$UPDATE app_orgs SET name = 'x'$q$, 'ERR:permission denied', NULL),
+          (504, 'app', 'a', 'org DELETE denied',  $q$DELETE FROM app_orgs$q$, 'ERR:permission denied', NULL),
+          (505, 'app', 'a', 'orgs still readable', $q$SELECT count(*)::text FROM app_orgs WHERE slug IN ('worldrisk', 'adars')$q$, '2', NULL),
+          (510, 'app', 'a', 'cannot SELECT cred_ciphertext', $q$SELECT cred_ciphertext FROM app_integrations$q$, 'ERR:permission denied', NULL),
+          (511, 'app', 'a', 'cannot SELECT cred_nonce',      $q$SELECT cred_nonce FROM app_integrations$q$, 'ERR:permission denied', NULL),
+          (512, 'app', 'a', 'SELECT * on app_integrations fails by design', $q$SELECT * FROM app_integrations$q$, 'ERR:permission denied', NULL),
+          (513, 'app', 'a', 'has_credentials readable',      $q$SELECT has_credentials::text FROM app_integrations WHERE id = {a_integ_cred}$q$, 'true', NULL),
+          (514, 'app', 'a', 'has_credentials false when none', $q$SELECT has_credentials::text FROM app_integrations WHERE id = {a_integ}$q$, 'false', NULL),
+          (520, 'app', 'a', 'credential function returns the secret to its own org', $q$SELECT credential_source || ':' || cred_key_id || ':' || octet_length(cred_ciphertext) || ':' || octet_length(cred_nonce) FROM app_integration_credentials({a_integ_cred})$q$, 'stored:smoke-key:4:12', NULL),
+          (521, 'app', 'b', 'credential function: other org gets 0 rows', $q$SELECT count(*)::text FROM app_integration_credentials({a_integ_cred})$q$, '0', NULL),
+          (522, 'app', 'none', 'credential function: no context gets 0 rows', $q$SELECT count(*)::text FROM app_integration_credentials({a_integ_cred})$q$, '0', NULL),
+          (530, 'app', 'a', 'env:JWT_SECRET integration refused (INSERT)', $q$INSERT INTO app_integrations (org_id, kind, name, host, port, database, credential_source) VALUES (app_current_org(), 'postgres', 'jwt', 'localhost', 5432, 'x', 'env:JWT_SECRET')$q$, 'ERR:(row-level security|check constraint)', NULL),
+          (531, 'app', 'a', 'env:DATABASE_URL_READONLY_WR refused for portal_app (INSERT, restrictive policy)', $q$INSERT INTO app_integrations (org_id, kind, name, host, port, database, credential_source) VALUES (app_current_org(), 'postgres', 'local wr', 'localhost', 5432, 'x', 'env:DATABASE_URL_READONLY_WR')$q$, 'ERR:row-level security', NULL),
+          (532, 'app', 'a', 'switching an integration to an env: source refused (UPDATE, restrictive policy)', $q$UPDATE app_integrations SET credential_source = 'env:DATABASE_URL_READONLY_WR' WHERE id = {a_integ}$q$, 'ERR:row-level security', NULL),
+          (533, 'app', 'a', 'CHECK refuses a malformed env: name even in a bare UPDATE', $q$UPDATE app_integrations SET credential_source = 'env:JWT_SECRET' WHERE id = {a_integ}$q$, 'ERR:(row-level security|check constraint)', NULL),
+          (534, 'app', 'a', 'a stored integration can still be updated', $q$WITH u AS (UPDATE app_integrations SET name = 'plain 2' WHERE id = {a_integ} RETURNING 1) SELECT count(*)::text FROM u$q$, '1', NULL),
+          -- ===== 6xx: settings ====================================================================
+          (600, 'app', 'a', 'system scope write refused (an org admin is just portal_app + org context)', $q$INSERT INTO app_settings (scope, key, value) VALUES ('system', 'language', '"en"')$q$, 'ERR:row-level security', NULL),
+          (601, 'app', 'a', 'another user''s scope write refused', $q$INSERT INTO app_settings (scope, user_id, key, value) VALUES ('user', {user_b}, 'language', '"en"')$q$, 'ERR:row-level security', NULL),
+          (602, 'app', 'a', 'org scope write in the own org allowed', $q$INSERT INTO app_settings (scope, org_id, key, value) VALUES ('org', app_current_org(), 'timeZone', '"UTC"')$q$, 'OK', NULL),
+          (603, 'app', 'a', 'own user scope write allowed', $q$INSERT INTO app_settings (scope, user_id, key, value) VALUES ('user', app_current_user(), 'timeZone', '"UTC"')$q$, 'OK', NULL),
+          -- ===== 7xx: platform role ===============================================================
+          (700, 'platform', 'none', 'app_is_platform() is true for the platform role', $q$SELECT app_is_platform()::text$q$, 'true', NULL),
+          (701, 'app',      'a',    'app_is_platform() is false for portal_app',      $q$SELECT app_is_platform()::text$q$, 'false', NULL),
+          (710, 'platform', 'none', 'org INSERT allowed',  $q$INSERT INTO app_orgs (slug, name) VALUES ('smoke-c', 'Smoke C')$q$, 'OK', NULL),
+          (711, 'platform', 'none', 'org UPDATE allowed',  $q$UPDATE app_orgs SET name = 'Smoke C2' WHERE slug = 'smoke-c'$q$, 'OK', NULL),
+          (712, 'platform', 'none', 'org DELETE denied',   $q$DELETE FROM app_orgs WHERE slug = 'smoke-c'$q$, 'ERR:permission denied', NULL),
+          (720, 'platform', 'none', 'no access to app_users', $q$SELECT count(*) FROM app_users$q$, 'ERR:permission denied', NULL),
+          (721, 'platform', 'none', 'no access to {T}',      $q$SELECT count(*) FROM {T}$q$, 'ERR:permission denied', 'denied'),
+          (730, 'platform', 'none', 'memberships readable without org context', $q$SELECT (count(*) >= 0)::text FROM app_memberships$q$, 'true', NULL),
+          (731, 'platform', 'none', 'membership INSERT passes RLS (fails later on the user FK)', $q$INSERT INTO app_memberships (org_id, user_id, role) SELECT id, gen_random_uuid(), 'viewer' FROM app_orgs LIMIT 1$q$, 'ERR:foreign key', NULL),
+          (732, 'platform', 'none', 'membership UPDATE allowed', $q$UPDATE app_memberships SET is_active = false$q$, 'OK', NULL),
+          (733, 'platform', 'none', 'membership DELETE denied',  $q$DELETE FROM app_memberships$q$, 'ERR:permission denied', NULL),
+          (740, 'platform', 'none', 'global host INSERT allowed', $q$INSERT INTO app_allowed_hosts (host, port_min, port_max) VALUES ('example.test', 1, 2)$q$, 'OK', NULL),
+          (741, 'platform', 'none', 'global host visible',        $q$SELECT count(*)::text FROM app_allowed_hosts WHERE host = 'example.test'$q$, '1', NULL),
+          (742, 'platform', 'none', 'global host UPDATE allowed', $q$UPDATE app_allowed_hosts SET note = 'n' WHERE host = 'example.test'$q$, 'OK', NULL),
+          (743, 'platform', 'none', 'global host DELETE allowed', $q$DELETE FROM app_allowed_hosts WHERE host = 'example.test'$q$, 'OK', NULL),
+          (750, 'platform', 'none', 'system setting INSERT allowed', $q$INSERT INTO app_settings (scope, key, value) VALUES ('system', 'language', '"en"')$q$, 'OK', NULL),
+          (751, 'platform', 'none', 'system setting UPDATE allowed', $q$UPDATE app_settings SET value = '"fr"' WHERE scope = 'system' AND key = 'language'$q$, 'OK', NULL),
+          (752, 'platform', 'none', 'system setting DELETE allowed', $q$DELETE FROM app_settings WHERE scope = 'system' AND key = 'language'$q$, 'OK', NULL),
+          (760, 'platform', 'none', 'audit INSERT ... RETURNING allowed (platform sees all rows)', $q$WITH i AS (INSERT INTO app_audit_log (action) VALUES ('smoke-plat') RETURNING 1) SELECT count(*)::text FROM i$q$, '1', NULL),
+          (761, 'platform', 'none', 'audit rows readable across orgs', $q$SELECT count(*)::text FROM app_audit_log WHERE action = 'smoke-plat'$q$, '1', NULL),
+          (762, 'platform', 'none', 'audit UPDATE denied',   $q$UPDATE app_audit_log SET action = 'x'$q$, 'ERR:permission denied', NULL),
+          (763, 'platform', 'none', 'audit DELETE denied',   $q$DELETE FROM app_audit_log$q$, 'ERR:permission denied', NULL),
+          (764, 'platform', 'none', 'audit TRUNCATE denied', $q$TRUNCATE app_audit_log$q$, 'ERR:permission denied', NULL),
+          (770, 'platform', 'none', 'no EXECUTE on the credential function', $q$SELECT * FROM app_integration_credentials('00000000-0000-0000-0000-000000000000')$q$, 'ERR:permission denied', NULL)
+        )
+        SELECT tests.n, x.k, tests.ctx, tests.expect,
+               replace(tests.label, '{T}', coalesce(x.tbl, '')) AS label,
+               replace(tests.sql,   '{T}', coalesce(x.tbl, '')) AS sql
+          FROM tests CROSS JOIN sets
+          CROSS JOIN LATERAL unnest(CASE tests.tbls
+                                        WHEN 'tenant' THEN sets.tenant WHEN 'upd' THEN sets.upd
+                                        WHEN 'del' THEN sets.del WHEN 'allt' THEN sets.allt
+                                        WHEN 'denied' THEN sets.denied
+                                        ELSE ARRAY[NULL::text] END) WITH ORDINALITY AS x(tbl, k)
+         WHERE tests.who IN (kind, 'both')
+         ORDER BY tests.n, x.k
+    LOOP
+        q := t.sql;
+        FOREACH tok IN ARRAY ARRAY['org_a','org_b','user_a','user_b','a_folder','a_dash','a_integ','a_integ_cred',
+                                   'b_folder','b_dash','b_integ'] LOOP
+            q := replace(q, '{' || tok || '}', quote_nullable(current_setting('smoke.' || tok, true)));
+        END LOOP;
+
+        PERFORM set_config('app.org_id',
+            CASE t.ctx WHEN 'a' THEN coalesce(current_setting('smoke.org_a', true), '')
+                       WHEN 'b' THEN coalesce(current_setting('smoke.org_b', true), '') ELSE '' END, true);
+        PERFORM set_config('app.user_id',
+            CASE t.ctx WHEN 'a'           THEN coalesce(current_setting('smoke.user_a', true), '')
+                       WHEN 'a_user_only' THEN coalesce(current_setting('smoke.user_a', true), '')
+                       WHEN 'b'           THEN coalesce(current_setting('smoke.user_b', true), '') ELSE '' END, true);
+
+        err := NULL; got := NULL;
+        BEGIN
+            IF t.expect LIKE 'ERR:%' THEN
+                EXECUTE q;
+                RAISE EXCEPTION '__no_error__';      -- also undoes whatever the unexpectedly successful statement did
+            ELSIF t.expect = 'OK' THEN
+                EXECUTE q;
+            ELSE
+                EXECUTE q INTO got;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            err := SQLERRM;
+        END;
+
+        IF t.expect LIKE 'ERR:%' THEN
+            ok := err IS NOT NULL AND err <> '__no_error__' AND err ~* substr(t.expect, 5);
+        ELSIF t.expect = 'OK' THEN
+            ok := err IS NULL;
+        ELSE
+            ok := err IS NULL AND got IS NOT DISTINCT FROM t.expect;
+        END IF;
+
+        IF ok THEN
+            pass := pass + 1;
+            RAISE NOTICE 'PASS %  %', t.n, t.label;
+        ELSE
+            fail := fail + 1;
+            RAISE NOTICE 'FAIL %  %  <-- expected %, got %', t.n, t.label, t.expect,
+                         coalesce('error: ' || err, 'value: ' || coalesce(got, 'NULL'));
+        END IF;
+    END LOOP;
+
+    RAISE NOTICE 'smoke_m5 (%): % passed, % FAILED', current_user, pass, fail;
+END
+$smoke$;
+
+ROLLBACK;

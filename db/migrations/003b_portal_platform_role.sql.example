@@ -1,0 +1,48 @@
+-- 003b_portal_platform_role.sql.example
+-- Second application login role, used ONLY by the platform (director) code path.
+--
+-- WHY A SEPARATE ROLE. The platform path (create/rename organisations, manage memberships
+-- across orgs, global allowed hosts, system settings, cross-org audit reads) must not be a
+-- flag the application can switch on. 010 defines app_is_platform() as
+-- `current_user = '<platform_role>'`, so platform rights exist only on a connection that
+-- logged in as this role (DATABASE_URL_PLATFORM). portal_app can neither become it (it is a
+-- member of no role) nor impersonate it from SQL.
+--
+-- The role holds NO privilege here beyond CONNECT and USAGE on schema public. Its table
+-- grants (a short list, see 010) are made by 010, which needs this role to exist first.
+--
+-- RUN AS:  postgres (CREATE ROLE is needed). By Jay, by hand. After 001, before 010
+--   (003 and 004 are unrelated and may run in any order relative to this file).
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/003b_portal_platform_role.sql.example
+--
+-- NO PASSWORD IS IN THIS FILE. LOGIN without a password cannot authenticate (scram/md5).
+-- MANUAL STEP right after, as postgres, interactively:
+--   sudo -u postgres psql -d jaysnet_data
+--   \password portal_platform
+-- (generate with: openssl rand -base64 32; it goes into DATABASE_URL_PLATFORM only).
+-- Check pg_hba.conf first: a `trust` line matching this role would let it in without a password.
+--
+-- ATTRIBUTES: NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT, so it is
+-- subject to every RLS policy like portal_app; statement_timeout 10s as portal_app.
+--
+-- To use another name, edit it here AND pass -v platform_role=<name> to 010 (and its down file).
+-- Rollback: 003b_portal_platform_role.down.sql.example (after 010's rollback).
+--
+-- CHECKS AFTER RUNNING (as postgres):
+--   SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit, rolreplication
+--     FROM pg_roles WHERE rolname = 'portal_platform';          -- t f f f f f f
+--   SELECT s.setconfig FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+--     WHERE r.rolname = 'portal_platform';                      -- {statement_timeout=10s}
+--   SELECT has_table_privilege('portal_platform','app_users','SELECT');   -- false (010 grants nothing there)
+
+BEGIN;
+
+CREATE ROLE portal_platform LOGIN
+    NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+
+ALTER ROLE portal_platform SET statement_timeout = '10s';
+
+GRANT CONNECT ON DATABASE jaysnet_data TO portal_platform;
+GRANT USAGE ON SCHEMA public TO portal_platform;
+
+COMMIT;

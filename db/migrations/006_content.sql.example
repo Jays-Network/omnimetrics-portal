@@ -21,7 +21,11 @@
 --   * kind folder|dashboard; a dashboard cannot have children (trigger).
 --   * Top level (parent_id NULL) holds FOLDERS only (assumption, see CHECK below).
 --   * depth is maintained by trigger (root = 1), maximum 8; a move that would push any
---     descendant past 8 is rejected; cycles are rejected. Writers cannot set depth.
+--     descendant past 8 is rejected; cycles are rejected. Writers cannot set depth: a
+--     direct change is allowed only when pg_trigger_depth() > 1, i.e. from the after-move
+--     trigger's own descendant UPDATE (no session setting involved, nothing to forge).
+--     Side effect: an UPDATE of depth issued from inside ANOTHER trigger would also pass;
+--     no such trigger exists.
 --   * Structural changes take a per-org advisory lock, so two concurrent moves cannot
 --     create a cycle or exceed the depth limit.
 --   * Sibling names unique (case-insensitive) among NON-deleted siblings. Restoring a
@@ -30,7 +34,7 @@
 --     the app treats a node under a deleted ancestor as deleted. Hard DELETE is not
 --     granted to portal_app (010).
 --   * Versions: append-only (trigger blocks UPDATE, DELETE, TRUNCATE for everyone,
---     including the owner; DROP TABLE is the only way out). current_version is a
+--     including the owner; DROP TABLE is the only way out). spec is capped at 1 MiB (CHECK). current_version is a
 --     composite FK to the version row of the SAME node and org (deferred, so a node and
 --     its first version can be created in one transaction: insert node, insert version,
 --     update node.current_version).
@@ -105,6 +109,9 @@ CREATE TABLE app_dashboard_versions (
     CONSTRAINT app_dashboard_versions_spec_object   CHECK (jsonb_typeof(spec) = 'object'),
     CONSTRAINT app_dashboard_versions_kind_check    CHECK (node_kind = 'dashboard'),
     CONSTRAINT app_dashboard_versions_note_len      CHECK (note IS NULL OR length(note) <= 500),
+    -- 1 MiB cap on a stored spec (measured on the value being inserted; the DB-side backstop
+    -- for the app's own size limit).
+    CONSTRAINT app_dashboard_versions_spec_size     CHECK (pg_column_size(spec) <= 1048576),
     -- node_id is unique per org+version; also the FK target for nodes.current_version.
     CONSTRAINT app_dashboard_versions_node_version_key UNIQUE (org_id, node_id, version),
     -- Same org AND the node is a dashboard (folders cannot hold versions).
@@ -160,8 +167,9 @@ BEGIN
         END IF;
         IF NEW.parent_id IS NOT DISTINCT FROM OLD.parent_id THEN
             -- depth may only change through the move propagation below
-            IF NEW.depth IS DISTINCT FROM OLD.depth
-               AND coalesce(current_setting('app.depth_sync', true), '') <> 'on' THEN
+            -- pg_trigger_depth() = 1: this guard was fired directly by the user's statement.
+            -- > 1: fired by the after-move trigger's own UPDATE of the descendants.
+            IF NEW.depth IS DISTINCT FROM OLD.depth AND pg_trigger_depth() <= 1 THEN
                 RAISE EXCEPTION 'app_content_nodes: depth is maintained by the database' USING ERRCODE = 'check_violation';
             END IF;
             RETURN NEW;
@@ -229,7 +237,6 @@ SET search_path = pg_catalog, public
 AS $$
 BEGIN
     IF NEW.depth <> OLD.depth THEN
-        PERFORM set_config('app.depth_sync', 'on', true);
         WITH RECURSIVE d(id) AS (
             SELECT id FROM app_content_nodes WHERE org_id = NEW.org_id AND parent_id = NEW.id
             UNION
@@ -238,7 +245,6 @@ BEGIN
         UPDATE app_content_nodes c
            SET depth = c.depth + (NEW.depth - OLD.depth)
           FROM d WHERE c.id = d.id AND c.org_id = NEW.org_id;
-        PERFORM set_config('app.depth_sync', 'off', true);
     END IF;
     RETURN NULL;
 END;

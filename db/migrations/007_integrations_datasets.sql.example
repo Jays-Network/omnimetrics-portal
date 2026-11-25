@@ -13,22 +13,29 @@
 --   * credential_source = 'stored'      -> cred_ciphertext, cred_nonce, cred_key_id are
 --                                          either all NULL (not entered yet) or all set;
 --                                          nonce is exactly 12 bytes (AES-256-GCM).
---   * credential_source = 'env:NAME'    -> all three are NULL (managed local source,
---                                          e.g. env:DATABASE_URL_READONLY_WR).
+--   * credential_source = 'env:DATABASE_URL_READONLY_<NAME>' -> all three are NULL (managed
+--                                          local source, e.g. env:DATABASE_URL_READONLY_WR).
+--                                          ONLY that prefix is accepted (CHECK): an env: source
+--                                          can never name JWT_SECRET, INTEGRATION_KEYS or any
+--                                          other variable. 010 additionally limits who may write
+--                                          a non-'stored' source (restrictive policy).
 -- AES-GCM itself, the AAD (org_id|integration_id|key_id) and INTEGRATION_KEYS live in the
 -- app (lib/integrations/secrets.ts); the database cannot verify them.
 --
--- app_integrations_public: a view without the secret columns, for LIST queries
--- (security_invoker, so row-level security of the caller applies). The connector path
--- reads the base table. A list query that does `SELECT *` on the base table is the
--- mistake this view makes easy to avoid.
+-- SECRET COLUMNS ARE NOT READABLE BY THE APP ROLES (010): column-level SELECT excludes
+-- cred_ciphertext and cred_nonce, so `SELECT *` on this table fails for them by design. The
+-- connector path reads them only through the function app_integration_credentials(id) (010).
+-- has_credentials (generated) tells list queries whether a credential is stored without
+-- reading it. There is no secret-free view any more: the grants do that job.
 --
 -- CHECKS AFTER RUNNING:
 --   \dt app_*   -- + app_allowed_hosts, app_integrations, app_datasets, app_dataset_fields
 --   \d app_integrations
 --   SELECT count(*) FROM app_integrations WHERE cred_ciphertext IS NOT NULL;   -- 0
---   SELECT column_name FROM information_schema.columns WHERE table_name='app_integrations_public'
---     AND column_name LIKE 'cred\_%' ESCAPE '\';                               -- 0 rows
+--   SELECT column_name, is_generated FROM information_schema.columns
+--     WHERE table_name='app_integrations' AND column_name='has_credentials';     -- 1 row, ALWAYS
+--   BEGIN; INSERT INTO app_integrations (org_id,kind,name,host,port,database,credential_source)
+--     SELECT id,'postgres','x','h',1,'d','env:JWT_SECRET' FROM app_orgs LIMIT 1; ROLLBACK;  -- ERROR (check)
 
 BEGIN;
 
@@ -62,6 +69,7 @@ CREATE TABLE app_integrations (
     cred_ciphertext   BYTEA,
     cred_nonce        BYTEA,
     cred_key_id       TEXT,
+    has_credentials   BOOLEAN GENERATED ALWAYS AS (cred_ciphertext IS NOT NULL) STORED,
     status            TEXT NOT NULL DEFAULT 'active',
     rotated_at        TIMESTAMPTZ,
     created_by        UUID REFERENCES app_users(id),
@@ -73,7 +81,7 @@ CREATE TABLE app_integrations (
     CONSTRAINT app_integrations_ssl_check    CHECK (ssl_mode IN ('disable', 'require', 'verify-ca', 'verify-full')),
     CONSTRAINT app_integrations_status_check CHECK (status IN ('active', 'disabled')),
     CONSTRAINT app_integrations_cred_source_check
-        CHECK (credential_source = 'stored' OR credential_source ~ '^env:[A-Z][A-Z0-9_]{0,63}$'),
+        CHECK (credential_source = 'stored' OR credential_source ~ '^env:DATABASE_URL_READONLY_[A-Z0-9_]{1,32}$'),
     CONSTRAINT app_integrations_cred_shape_check CHECK (
         (credential_source = 'stored'
             AND ((cred_ciphertext IS NULL AND cred_nonce IS NULL AND cred_key_id IS NULL)
@@ -85,14 +93,6 @@ CREATE TABLE app_integrations (
     CONSTRAINT app_integrations_org_id_key UNIQUE (org_id, id)
 );
 CREATE UNIQUE INDEX app_integrations_org_name_uq ON app_integrations (org_id, lower(name));
-
--- Secret-free projection for lists.
-CREATE VIEW app_integrations_public WITH (security_invoker = true) AS
-SELECT id, org_id, kind, name, host, port, database, ssl_mode, relation_allowlist,
-       credential_source, status, rotated_at, created_by, created_at, updated_at,
-       (cred_ciphertext IS NOT NULL) AS has_credentials,
-       cred_key_id                   AS key_id
-  FROM app_integrations;
 
 -- Dataset catalogue. relation = a table/view in the integration; named_query = the KEY
 -- of a query defined in application code (never SQL text; no SQL is stored anywhere).

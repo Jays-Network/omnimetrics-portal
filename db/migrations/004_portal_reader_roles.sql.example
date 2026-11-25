@@ -10,9 +10,18 @@
 --
 -- RUN AS:  postgres (superuser; CREATE ROLE is needed). By Jay, by hand.
 --   cp db/migrations/004_portal_reader_roles.sql.example db/migrations/004_portal_reader_roles.sql
---   (edit the two passwords; the real file name is not committed: add it to .gitignore)
+--   (edit the timezone lines only if the pre-flight says so; the copy stays git-ignored: see .gitignore)
 --   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.sql
---   Generate passwords with: openssl rand -base64 32
+--
+-- NO PASSWORD IS IN THIS FILE. The roles are created LOGIN with no password, so nobody can
+-- authenticate as them (with scram/md5 in pg_hba.conf) until you set one. MANUAL STEP, right
+-- after the file, as postgres, interactively (the password never enters a file, the shell
+-- history or psql's history):
+--   sudo -u postgres psql -d jaysnet_data
+--   \password portal_reader_wr
+--   \password portal_reader_adars
+-- (generate each with: openssl rand -base64 32). CHECK pg_hba.conf first: a `trust` line that
+-- matches these roles would let them in WITHOUT a password (checklist pre-flight).
 --
 -- Rollback: 004_portal_reader_roles.down.sql.example
 --
@@ -87,16 +96,16 @@
 --     ORDER BY 1, 2, 3;                 -- expect 2 rows: each role / its table / SELECT
 --   -- 5. no app_* access (expect all false)
 --   SELECT has_table_privilege('portal_reader_wr','app_users','SELECT'), has_table_privilege('portal_reader_adars','app_users','SELECT');
---   -- 6. connection test (from the app host, with the real password):
+--   -- 6. connection test (from the app host, AFTER \password was set for both roles):
 --   --    psql "postgresql://portal_reader_wr@localhost:5432/jaysnet_data" -c "SHOW timezone" -c "SHOW default_transaction_read_only"
 --   --    -c "SELECT count(*) FROM adars_tracking"   -- expect: permission denied for table adars_tracking
 
 BEGIN;
 
-CREATE ROLE portal_reader_wr LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD_WR'
+CREATE ROLE portal_reader_wr LOGIN
     NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 
-CREATE ROLE portal_reader_adars LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD_ADARS'
+CREATE ROLE portal_reader_adars LOGIN
     NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 
 ALTER ROLE portal_reader_wr    SET statement_timeout = '10s';

@@ -1,7 +1,8 @@
 -- 010_rls_grants.down.sql.example
 -- Rollback of 010: removes every policy, turns RLS off, drops the helper functions, and
 -- returns portal_app to the 003 privilege set. RUN AS: jaysnet_admin. FIRST rollback step.
---   psql -v ON_ERROR_STOP=1 -v app_role=portal_app -U jaysnet_admin -d jaysnet_data -f <this file>
+--   psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -f <this file>
+--   (-v platform_role is optional: default portal_platform. The role itself is dropped by 003b's down file.)
 --
 -- Restores table-wide INSERT/UPDATE on app_users (the 003 state). Does NOT undo the org_id
 -- values or the tables themselves (that is 009 .. 005). Revert the app to the pre-M5 release
@@ -9,11 +10,15 @@
 --
 -- CHECK AFTER: SELECT count(*) FROM pg_policies WHERE schemaname='public';       -- 0
 --              SELECT count(*) FROM pg_class WHERE relname LIKE 'app\_%' ESCAPE '\' AND relrowsecurity;  -- 0
---              SELECT proname FROM pg_proc WHERE proname IN ('app_current_org','app_current_user','app_is_platform'); -- 0 rows
+--              SELECT proname FROM pg_proc WHERE proname IN ('app_current_org','app_current_user','app_is_platform','app_integration_credentials'); -- 0 rows
 
 \if :{?app_role}
 \else
     \set app_role portal_app
+\endif
+\if :{?platform_role}
+\else
+    \set platform_role portal_platform
 \endif
 
 BEGIN;
@@ -36,14 +41,15 @@ END $$;
 DROP FUNCTION IF EXISTS app_current_org();
 DROP FUNCTION IF EXISTS app_current_user();
 DROP FUNCTION IF EXISTS app_is_platform();
+DROP FUNCTION IF EXISTS app_integration_credentials(uuid);
 
 ALTER TABLE app_user_projects ALTER COLUMN org_id DROP NOT NULL;
 
 -- Privileges: remove everything this migration granted on the new tables ...
 REVOKE ALL ON app_orgs, app_memberships, app_content_nodes, app_dashboard_versions, app_grants,
-              app_allowed_hosts, app_integrations, app_integrations_public, app_datasets,
+              app_allowed_hosts, app_integrations, app_datasets,
               app_dataset_fields, app_settings
-    FROM :"app_role";
+    FROM :"app_role", :"platform_role";   -- table-level REVOKE also removes the column-level grants
 -- ... and return the three 001 tables to the 003 state.
 REVOKE INSERT (username, email, hashed_password, role, is_active),
        UPDATE (username, email, hashed_password, role, is_active, updated_at)
@@ -51,8 +57,10 @@ REVOKE INSERT (username, email, hashed_password, role, is_active),
 GRANT SELECT, INSERT, UPDATE ON app_users TO :"app_role";
 REVOKE ALL ON app_user_projects FROM :"app_role";
 GRANT SELECT, INSERT, DELETE ON app_user_projects TO :"app_role";
-REVOKE ALL ON app_audit_log FROM :"app_role";
+REVOKE ALL ON app_audit_log FROM :"app_role", :"platform_role";
+REVOKE ALL ON SEQUENCE app_audit_log_id_seq FROM :"platform_role";
 GRANT SELECT, INSERT ON app_audit_log TO :"app_role";
 GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq TO :"app_role";
+REVOKE ALL ON app_users, app_user_projects FROM :"platform_role";
 
 COMMIT;
