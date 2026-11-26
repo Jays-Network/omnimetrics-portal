@@ -41,6 +41,25 @@ export async function requirePortalUser(): Promise<PortalPageContext> {
 }
 
 /**
+ * The one place where (user, slug) becomes the access handed to the portal, for pages and routes.
+ * Null = not found (also for a missing capability). With pg the accessible list is only a hint for
+ * the shell: requireOrg() asks the database again and issues the only ctx the repositories accept.
+ */
+export async function resolveOrg(user: User, resolved: Pick<PortalPageContext, 'portal' | 'accessible'>, orgSlug: string, cap?: Capability): Promise<OrgAccess | null> {
+  if (resolved.portal.mode === 'pg') {
+    const [{ requireOrg }, { NotFound }] = await Promise.all([import('./pg/org'), import('./pg/errors')])
+    try {
+      return await requireOrg(user, orgSlug, cap)
+    } catch (error) {
+      if (error instanceof NotFound) return null
+      throw error
+    }
+  }
+  const access = resolved.accessible.find((a) => a.org.slug === orgSlug)
+  return access && (!cap || access.capabilities.includes(cap)) ? access : null
+}
+
+/**
  * Guard for every org-scoped page. The slug in the URL is only a HINT: it must
  * match an organisation the user may enter (404 otherwise, so existence is not
  * confirmed) and the user must hold `cap`. Pages call this themselves; the
@@ -48,8 +67,8 @@ export async function requirePortalUser(): Promise<PortalPageContext> {
  */
 export async function requireOrgPage(orgSlug: string, cap?: Capability) {
   const ctx = await requirePortalUser()
-  const access = ctx.accessible.find((a) => a.org.slug === orgSlug)
-  if (!access || (cap && !access.capabilities.includes(cap))) notFound()
+  const access = await resolveOrg(ctx.user, ctx, orgSlug, cap)
+  if (!access) notFound()
   return { ...ctx, access }
 }
 

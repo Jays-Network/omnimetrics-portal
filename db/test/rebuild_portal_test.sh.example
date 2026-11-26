@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# rebuild_portal_test.sh.example
+# Tears down and recreates the THROWAWAY database portal_test with migrations 001, 005-010 and 011
+# (docs/M5_APPLY_CHECKLIST.md sections 6 and 8). Never touches jaysnet_data or the real roles.
+#
+# RUN AS root, from anywhere:
+#   sudo bash db/test/rebuild_portal_test.sh.example
+#
+# It DROPS portal_test and the three portal_test_* roles first, so their passwords are lost.
+# No password is in this file. Afterwards set them by hand (see the reminder it prints).
+#
+# The schema files run as postgres with `role=portal_test_owner` (the same ownership as connecting as the
+# owner, which has no password yet at this point). 011 and the test administrator need postgres itself.
+
+set -euo pipefail
+
+DB="${1:-portal_test}"
+if [[ "$DB" != "portal_test" ]]; then
+  echo "REFUSING: this script only rebuilds portal_test (got '$DB')." >&2
+  exit 1
+fi
+if [[ $EUID -ne 0 ]]; then
+  echo "Run as root: sudo bash $0" >&2
+  exit 1
+fi
+# Nothing from the caller's environment may redirect psql to another server or database.
+unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGSERVICE PGOPTIONS
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO"
+SETUP=db/test/setup_test_db.sql.example
+
+as_postgres() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }
+as_owner() { runuser -u postgres -- env PGOPTIONS='-c role=portal_test_owner' psql -X -q -v ON_ERROR_STOP=1 -d "$DB" "$@"; }
+
+echo "== teardown"
+as_postgres -d postgres -v teardown=1 -f "$SETUP"
+echo "== create database and roles"
+as_postgres -d postgres -f "$SETUP"
+
+actual="$(as_postgres -d "$DB" -tAc 'SELECT current_database()')"
+if [[ "$actual" != "portal_test" ]]; then
+  echo "REFUSING: connected to '$actual', not portal_test." >&2
+  exit 1
+fi
+
+echo "== schema 001, 005-009 (as portal_test_owner)"
+for f in 001_app_tables.sql \
+         005_orgs_memberships.sql.example 006_content.sql.example 007_integrations_datasets.sql.example \
+         008_settings.sql.example 009_audit_backfill.sql.example; do
+  as_owner -f "db/migrations/$f"
+done
+echo "== 010 (RLS and grants for the test roles)"
+as_owner -v app_role=portal_test_app -v platform_role=portal_test_platform -f db/migrations/010_rls_grants.sql.example
+echo "== 011 (as postgres)"
+as_postgres -d "$DB" -f db/migrations/011_seed_managed_sources.sql.example
+
+echo "== platform administrator for pnpm test:db (only postgres can set the flag; '!' is not a hash, so no login)"
+as_postgres -d "$DB" -c "INSERT INTO app_users (username, email, hashed_password, role, is_platform_admin)
+  VALUES ('itest_director', 'itest_director@example.test', '!', 'viewer', true)
+  ON CONFLICT (username) DO UPDATE SET is_platform_admin = true, is_active = true"
+
+cat <<'REMINDER'
+
+portal_test rebuilt. NOW set the passwords again (the roles were recreated without one):
+  sudo -u postgres psql -d portal_test
+    \password portal_test_app
+    \password portal_test_platform
+    \password portal_test_owner      (only if you connect as the owner)
+pnpm test:db needs the two test-role passwords after EVERY rebuild: use the ones in
+apps/web/.env.test (TEST_DATABASE_URL_APP, TEST_DATABASE_URL_PLATFORM) or update that file.
+REMINDER

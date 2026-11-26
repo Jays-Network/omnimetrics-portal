@@ -273,3 +273,23 @@ Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skip
 
 - `env:` integrations are created only by 011 (as `postgres`). `portal_platform` has no grant on `app_integrations` and the owner is not the platform role, so the app can neither create nor change them; adding a third managed source later means another seed file as `postgres` (or a deliberate platform grant). The app must render managed rows read-only.
 - `portal_app` is now `SELECT` only on `app_allowed_hosts`; adding a host needs the platform path (`portal_platform`, which keeps full DML there).
+
+## 8. Application tests against the throwaway database (`pnpm test:db`, stage 2a)
+
+`portal_test` only. The harness refuses to run unless `current_database()` is `portal_test` and the users are `portal_test_app` / `portal_test_platform`.
+Needs `apps/web/.env.test` (git-ignored) with `TEST_DATABASE_URL_APP` and `TEST_DATABASE_URL_PLATFORM`.
+
+```bash
+cd /opt/omnimetrics-portal
+sudo bash db/test/rebuild_portal_test.sh.example          # drops and recreates portal_test (001, 005-010, 011)
+sudo -u postgres psql -d portal_test                      # then: \password portal_test_app   \password portal_test_platform
+pnpm test:db                                              # pg repositories: contract, isolation matrix, grants, context
+pnpm test                                                 # unit tests (no database)
+```
+The passwords must match `.env.test`, and must be set again after every rebuild.
+
+The tests need one platform administrator, `itest_director`, which only postgres can create; the rebuild script does it. To add it to an existing `portal_test` without rebuilding:
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -c "INSERT INTO app_users (username,email,hashed_password,role,is_platform_admin) VALUES ('itest_director','itest_director@example.test','!','viewer',true) ON CONFLICT (username) DO UPDATE SET is_platform_admin=true, is_active=true"
+```
+Test data is rolled back (neither test role could delete it). The one committed write is the suspended/archived test, which changes the `adars` status and restores it; after an interrupted run, rebuild. The smoke test (section 6) still works afterwards.

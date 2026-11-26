@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:db": "vitest run -c vitest.integration.config.ts",
     "test:layout": "playwright test e2e/editor-layout.spec.ts e2e/pages-layout.spec.ts"
   },
   "dependencies": {

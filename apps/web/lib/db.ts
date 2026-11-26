@@ -3,11 +3,13 @@ import postgres from 'postgres'
 type Sql = ReturnType<typeof postgres>
 
 /**
- * Two lazily-created postgres.js clients, cached on globalThis so Next.js dev
+ * Lazily-created postgres.js clients, cached on globalThis so Next.js dev
  * hot reloads do not leak connection pools.
  *
  *  - getDb()         DATABASE_URL           portal_app role: app_* tables only (auth, users, audit log)
  *  - getReadonlyDb() DATABASE_URL_READONLY  portal_reader: tracking-data reads, 10s statement_timeout
+ *  - getAppDb()      DATABASE_URL           portal_app: the M5 repositories, only through withOrg/withUser
+ *  - getPlatformDb() DATABASE_URL_PLATFORM  portal_platform: only through withPlatform()
  *
  * Clients are created on first use, so `next build` does not need a database.
  * All queries MUST use tagged-template parameters (sql`... ${value}`); never
@@ -19,6 +21,8 @@ const STATEMENT_TIMEOUT_MS = 10_000
 const globalForDb = globalThis as unknown as {
   __omniSql?: Sql
   __omniSqlReadonly?: Sql
+  __omniSqlApp?: Sql
+  __omniSqlPlatform?: Sql
 }
 
 function requireEnv(name: string): string {
@@ -51,4 +55,23 @@ export function getReadonlyDb(): Sql {
     })
   }
   return globalForDb.__omniSqlReadonly
+}
+
+function tenantClient(envName: string): Sql {
+  return postgres(requireEnv(envName), {
+    max: 5,
+    idle_timeout: 30,
+    connect_timeout: 10,
+    connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+  })
+}
+
+/** M5 tenant path. Use through lib/portal/pg/context.ts only: without a context RLS returns no rows. */
+export function getAppDb(): Sql {
+  return (globalForDb.__omniSqlApp ??= tenantClient('DATABASE_URL'))
+}
+
+/** M5 director path. The login role is the switch (010), so nothing but withPlatform() may use it. */
+export function getPlatformDb(): Sql {
+  return (globalForDb.__omniSqlPlatform ??= tenantClient('DATABASE_URL_PLATFORM'))
 }

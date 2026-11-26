@@ -35,9 +35,16 @@ describe('getPortal', () => {
     vi.stubEnv('NODE_ENV', 'production')
     await expect(getPortal()).rejects.toThrow(/never used in production/)
   })
+  it('serves pg outside production only', async () => {
+    vi.stubEnv('PORTAL_DATA', 'pg')
+    vi.stubEnv('NODE_ENV', 'development')
+    expect((await getPortal()).mode).toBe('pg')
+    vi.stubEnv('NODE_ENV', 'production')
+    await expect(getPortal()).rejects.toThrow(/not enabled there/)
+  })
   it('rejects unknown PORTAL_DATA values', async () => {
     vi.stubEnv('NODE_ENV', 'development')
-    vi.stubEnv('PORTAL_DATA', 'pg')
+    vi.stubEnv('PORTAL_DATA', 'sqlite')
     await expect(getPortal()).rejects.toThrow(/Unsupported/)
   })
 })

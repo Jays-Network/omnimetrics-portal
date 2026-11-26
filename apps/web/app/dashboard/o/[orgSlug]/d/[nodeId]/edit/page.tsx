@@ -14,7 +14,7 @@ export default async function EditDashboardPage({ params }: { params: Promise<{ 
   const { orgSlug, nodeId } = await params
   const { portal, access } = await requireOrgPage(orgSlug, 'dashboards.edit')
   const view = await portal.dashboards.get(access, nodeId)
-  if (!view || !canEditDashboard(access, normalizeSpec(view.spec).settings)) notFound()
+  if (!view || view.yourAccess === 'view' || !canEditDashboard(access, normalizeSpec(view.spec).settings)) notFound()
   const versions = await portal.dashboards.versions(access, nodeId)
   if (!versions) notFound()
   return (

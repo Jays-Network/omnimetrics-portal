@@ -1,7 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { capabilitiesFor, MAX_TREE_DEPTH, type OrgAccess, type Role } from '@omnimetrics/types'
-import { mockPortal } from '@/lib/portal/mock'
-import { resetMockContent } from '@/lib/portal/mock/content'
 import { applyOp, childrenOf, depthOf, toClient, type StoredNode } from '@/lib/portal/tree'
 import { seedFor } from '@/lib/portal/mock/seed'
 import { pickDefaultOrg } from '@/lib/portal/org-pref'
@@ -19,8 +17,6 @@ const builder = org('worldrisk', 'builder')
 const viewer = org('worldrisk', 'viewer')
 const wrSeed = () => seedFor('worldrisk')
 const idOf = (nodes: StoredNode[], name: string, kind?: string) => nodes.find((n) => n.name === name && (!kind || n.kind === kind))!.id
-
-beforeEach(() => resetMockContent())
 
 describe('mock seeds', () => {
   it('are different per organisation, nest at least 3 levels, and use only unique sibling names', () => {
@@ -135,30 +131,6 @@ describe('tree rules', () => {
     applyOp(o1.stored!, admin, { op: 'create', kind: 'dashboard', parentId: dom, name: 'Fuel and Idle' }, o3)
     const r = applyOp(o3.stored!, admin, { op: 'restore', batchId: d1.batchId! })
     expect(r.ok && r.nodes.some((n) => n.name === 'Fuel and Idle (restored)')).toBe(true)
-  })
-})
-
-describe('mock portal isolation (R: orgs never bleed)', () => {
-  const adarsAdmin = org('adars', 'admin')
-  it('returns a different tree per organisation and hides foreign ids', async () => {
-    const wr = await mockPortal.content.tree(admin)
-    const ad = await mockPortal.content.tree(adarsAdmin)
-    expect(wr.map((n) => n.id).some((id) => ad.some((a) => a.id === id))).toBe(false)
-    const wrDash = wr.find((n) => n.kind === 'dashboard')!
-    expect(await mockPortal.dashboards.get(admin, wrDash.id)).not.toBeNull()
-    expect(await mockPortal.dashboards.get(adarsAdmin, wrDash.id)).toBeNull()
-    // mutating a foreign id through the other org fails closed
-    expect(await mockPortal.content.apply(adarsAdmin, { op: 'rename', id: wrDash.id, name: 'Hacked' })).toMatchObject({ ok: false, code: 'not_found' })
-    expect((await mockPortal.content.tree(admin)).find((n) => n.id === wrDash.id)?.name).toBe(wrDash.name)
-  })
-  it('persists edits per organisation and gives viewers no grant list', async () => {
-    const created = await mockPortal.content.apply(admin, { op: 'create', kind: 'folder', parentId: null, name: 'Scratch' })
-    expect(created.ok).toBe(true)
-    expect((await mockPortal.content.tree(adarsAdmin)).some((n) => n.name === 'Scratch')).toBe(false)
-    const d = (await mockPortal.content.tree(admin)).find((n) => n.kind === 'dashboard')!
-    expect((await mockPortal.dashboards.get(admin, d.id))!.grants.length).toBeGreaterThan(0)
-    expect((await mockPortal.dashboards.get(viewer, d.id))!.grants).toEqual([])
-    expect((await mockPortal.dashboards.get(viewer, d.id))!.yourAccess).toBe('view')
   })
 })
 

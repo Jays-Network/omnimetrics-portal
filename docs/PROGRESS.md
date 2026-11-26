@@ -77,6 +77,11 @@ Rulings recorded: R7 (SQL terminal is director-only; CLAUDE.md hard rule updated
 - **M4.1 DONE (mock): Integrations is a card catalogue** (`components/admin/integrations-view.tsx`, registry `lib/admin/connectors.ts`: 11 connectors, only PostgreSQL functional, every other entry has a reason). **Root cause of the intermittent dev 500 found:** Playwright wrote screenshots/test-results inside `apps/web`, the Next dev watcher recompiled mid-test and answered 500 ("Unexpected end of JSON input" reading a manifest being rewritten). Output now goes outside the project (`LAYOUT_OUT` or the OS temp dir); a full run shows 0 recompiles and 0 errors.
 
 
+- **M5 stage 2a (2026-11-26): pg data layer for organisations, content, dashboards, versions, grants. NOT committed; database tests NOT yet run** (`password authentication failed for user "portal_test_app"`). `PORTAL_DATA` stays `mock`; `pg` works outside production only, and org pages fail in pg mode because settings are not implemented yet (fail closed).
+  - Code: `lib/portal/pg/{tx,context,org,access,errors,orgs,content,dashboards,index}.ts`, `getAppDb`/`getPlatformDb`, `resolveOrg` in `lib/portal/org.ts` (all org routes now use `guardOrg`). Shared tree rules (`applyOp`) drive both implementations; mock fix: a move counts soft-deleted descendants against the depth limit.
+  - Tests: unit 273 green (contract suite on the mock, route manifest, error mapping). `pnpm test:db` (contract on pg, isolation matrix, grants, context) per M5_APPLY_CHECKLIST section 8.
+  - Open: `listAll` returns 0 for integration and dashboard counts (`portal_platform` has no grant); no UI or API sets folder or organisation-wide grants; access rules in DECISIONS.md await Jay.
+
 ## Next
 - Jay reviews M1, then "approved" for M2 (org switcher refinements, content tree, dashboards list/viewer on mock data).
 - Step 3 stays parked until M5 (needs the per-org reader roles first).

@@ -77,3 +77,10 @@ Panels: P1 Monthly, P2 Escorts, P3 Heatmap, P4 Active Tracks, P8 Grand Total, P9
 - **Proposed portal behaviour:** none yet. A 6-hour range on a date column is not meaningful, so a day-based default is likely, but the range and timezone are Jay's call.
 - **Effect on counts:** every range-driven panel (P1, P2, P9, P11, P12) at first load.
 - **Default until ruled:** Grafana's definition (`now-6h`, browser time), unless Jay names a range before Step 4.
+
+## M5 access rules (stage 2a, 2026-11-26; portal content only, no tracking number changes)
+Made while building the pg layer; Jay to confirm or overrule before the cut-over.
+- Builders and viewers are **default deny** (PLAN_BUILDER 3.1): they see only what a grant covers, plus the folder names leading to it. The mock showed them everything, so after the cut-over they see nothing until grants exist.
+- The **nearest** grant wins (node, folders upwards, organisation-wide), so a grant can narrow. A viewer never exceeds view. `manage` gives a builder nothing beyond `edit`: only org admins and the director change grants.
+- Deleting a folder needs edit access on everything live inside it, so a narrowed item cannot be deleted through its parent.
+- A suspended or archived organisation is closed to everyone, the director included (the mock still lets the director in).

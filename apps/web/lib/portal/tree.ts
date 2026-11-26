@@ -211,6 +211,10 @@ export function applyOp(stored: readonly StoredNode[], actor: TreeActor, op: Con
       if (!node) return fail('not_found', 'That item no longer exists.')
       const err = moveError(visible, actor, op.id, op.parentId)
       if (err) return fail(err.includes('already exists') ? 'conflict' : err.includes('permission') || err.includes('Only an admin') ? 'forbidden' : 'invalid', err)
+      // Soft-deleted descendants move along and can be restored later, so they count towards the depth limit too (as in the database).
+      if (op.parentId !== null && depthOf(visible, op.parentId) + 1 + height(nodes, op.id) > MAX_TREE_DEPTH) {
+        return fail('invalid', `That would nest deeper than ${MAX_TREE_DEPTH} levels.`)
+      }
       const target = nodes.find((n) => n.id === op.id)!
       const oldParent = target.parentId
       target.parentId = op.parentId

@@ -4,7 +4,7 @@ import { z } from 'zod'
 // MOCK grants store (M3.3): in memory, per organisation AND dashboard. Real grants arrive in M5 with the
 // database; until then edits live only in this process and vanish on restart.
 export const GrantRowSchema = z.object({
-  principal: z.string().trim().min(1).max(60),
+  principal: z.string().trim().min(1).max(128), // pg role rows carry the organisation name (up to 120)
   kind: z.enum(['role', 'user', 'group']),
   access: z.enum(['view', 'edit', 'manage']),
   via: z.string().max(60).default('Direct grant'),

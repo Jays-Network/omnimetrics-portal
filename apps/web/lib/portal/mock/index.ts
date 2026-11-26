@@ -1,5 +1,5 @@
 import { capabilitiesFor, type OrgAccess } from '@omnimetrics/types'
-import type { Portal, PortalIdentity, OrgSummary, OrgCtx } from '../types'
+import type { Portal, PortalIdentity, OrgSummary } from '../types'
 import { applyOp, pathOf, toClient, type StoredNode } from '../tree'
 import { mockStore, setMockStore } from './content'
 import { buildDashboardView } from './dashboard'
@@ -43,18 +43,18 @@ function accessFor(who: PortalIdentity): OrgAccess[] {
   ]
 }
 
-function requireEdit(ctx: OrgCtx) {
+function requireEdit(ctx: OrgAccess) {
   if (!ctx.capabilities.includes('dashboards.edit')) throw new Error('forbidden')
 }
 
 /** A read-only dashboard refuses builders even if they call the API directly; admins and the director can still change it. */
-function requireEditable(ctx: OrgCtx, list: DashVersion[]) {
+function requireEditable(ctx: OrgAccess, list: DashVersion[]) {
   if (!canEditDashboard(ctx, normalizeSpec(list[list.length - 1]!.spec).settings)) throw new Error('forbidden')
 }
 
-const isDashboard = (ctx: OrgCtx, nodeId: string) => toClient(mockStore(ctx)).some((n) => n.id === nodeId && n.kind === 'dashboard')
+const isDashboard = (ctx: OrgAccess, nodeId: string) => toClient(mockStore(ctx)).some((n) => n.id === nodeId && n.kind === 'dashboard')
 
-function requireView(ctx: OrgCtx) {
+function requireView(ctx: OrgAccess) {
   if (!ctx.capabilities.includes('dashboards.view')) throw new Error('forbidden')
 }
 

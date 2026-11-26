@@ -3,18 +3,18 @@ import type { Capability } from '@omnimetrics/types'
 import { getCurrentUser } from '@/lib/auth'
 import { redact } from '@/lib/admin/redact'
 import type { Result } from '@/lib/admin/types'
-import { resolveAccess } from './org'
+import { resolveAccess, resolveOrg } from './org'
 
-// Shared guard for the M4 mock routes. Order matters and fails closed:
+// Shared guard for every org-scoped API route. Order matters and fails closed:
 // 401 no session; 404 when the organisation is not one the user may enter OR the user lacks the section capability
 // (existence and the section are not confirmed); finer actions inside a visible section answer 403 from the portal.
 export async function guardOrg(orgSlug: string, cap: Capability) {
   const user = await getCurrentUser()
   if (!user) return { res: NextResponse.json({ error: 'Unauthorised' }, { status: 401 }) }
-  const { portal, accessible } = await resolveAccess(user)
-  const access = accessible.find((a) => a.org.slug === orgSlug)
-  if (!access || !access.capabilities.includes(cap)) return { res: NextResponse.json({ error: 'Not found' }, { status: 404 }) }
-  return { portal, access, actor: { id: user.id, username: user.username } }
+  const resolved = await resolveAccess(user)
+  const access = await resolveOrg(user, resolved, orgSlug, cap)
+  if (!access) return { res: NextResponse.json({ error: 'Not found' }, { status: 404 }) }
+  return { portal: resolved.portal, access, actor: { id: user.id, username: user.username } }
 }
 
 export async function guardUser() {

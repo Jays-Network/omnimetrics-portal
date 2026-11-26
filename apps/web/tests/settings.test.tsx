@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { capabilitiesFor, type OrgAccess, type Role } from '@omnimetrics/types'
 import { DashSpecSchema, emptyDash, addPanel, parseSpec, type DashSpec } from '@/lib/builder/model'
@@ -8,10 +8,6 @@ import {
 } from '@/lib/builder/settings'
 import { SettingsView, SETTINGS_TABS, validateSpecText, type SettingsViewProps } from '@/components/builder/settings-view'
 import { useAutoRefresh } from '@/components/dashboards/use-refresh'
-import { mockPortal } from '@/lib/portal/mock'
-import { resetMockContent } from '@/lib/portal/mock/content'
-import { resetMockVersions } from '@/lib/portal/mock/versions'
-import { resetMockGrants } from '@/lib/portal/mock/grants'
 
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
@@ -21,7 +17,6 @@ const orgAdmin = org('admin')
 const builder = org('builder')
 const viewer = org('viewer')
 
-beforeEach(() => { resetMockContent(); resetMockVersions(); resetMockGrants() })
 afterEach(() => vi.useRealTimers())
 
 describe('settings schema', () => {
@@ -156,22 +151,6 @@ describe('read-only hides Edit from builders', () => {
     expect(canEditDashboard(director, ro(true))).toBe(true)
     expect(canEditDashboard(viewer, ro(false))).toBe(false)
   })
-  it('the portal shows Edit access, then removes it for builders once an admin makes the dashboard read-only', async () => {
-    const tree = await mockPortal.content.tree(director)
-    const id = tree.find((n) => n.kind === 'dashboard')!.id
-    expect((await mockPortal.dashboards.get(builder, id))!.yourAccess).toBe('edit')
-    const spec = (await mockPortal.dashboards.versions(director, id))!.at(-1)!.spec
-    const saved = await mockPortal.dashboards.saveVersion(orgAdmin, id, { spec: { ...spec, settings: { ...spec.settings, general: { ...spec.settings.general, editable: false } } }, note: 'read-only' }, 'admin')
-    expect(saved.ok).toBe(true)
-    expect((await mockPortal.dashboards.get(builder, id))!.yourAccess).toBe('view') // Edit hidden
-    expect((await mockPortal.dashboards.get(orgAdmin, id))!.yourAccess).toBe('manage')
-    await expect(mockPortal.dashboards.versions(builder, id)).rejects.toThrow('forbidden') // and refused server side
-    await expect(mockPortal.dashboards.saveVersion(builder, id, { restore: 1 }, 'b')).rejects.toThrow('forbidden')
-    expect(await mockPortal.dashboards.versions(orgAdmin, id)).not.toBeNull() // admins can still change it
-    const back = await mockPortal.dashboards.saveVersion(director, id, { spec, note: 'editable again' }, 'dir')
-    expect(back.ok).toBe(true)
-    expect((await mockPortal.dashboards.get(builder, id))!.yourAccess).toBe('edit')
-  })
 })
 
 describe('delete with undo', () => {
@@ -179,16 +158,6 @@ describe('delete with undo', () => {
     expect(capabilitiesFor('viewer', false)).not.toContain('dashboards.delete')
     for (const r of ['builder', 'admin'] as const) expect(capabilitiesFor(r, false)).toContain('dashboards.delete')
     expect(director.capabilities).toContain('dashboards.delete')
-  })
-  it('soft deletes and restores through the portal', async () => {
-    const tree = await mockPortal.content.tree(orgAdmin)
-    const d = tree.find((n) => n.kind === 'dashboard' && n.parentId !== null)!
-    const del = await mockPortal.content.apply(orgAdmin, { op: 'delete', id: d.id })
-    expect(del.ok && del.batchId).toBeTruthy()
-    expect((await mockPortal.content.tree(orgAdmin)).some((n) => n.id === d.id)).toBe(false)
-    const un = await mockPortal.content.apply(orgAdmin, { op: 'restore', batchId: del.ok ? del.batchId! : '' })
-    expect(un.ok).toBe(true)
-    expect((await mockPortal.content.tree(orgAdmin)).some((n) => n.id === d.id)).toBe(true)
   })
 })
 
@@ -324,20 +293,5 @@ describe('JSON Model', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'JSON Model' }))
     expect(screen.getByLabelText('Dashboard JSON')).toHaveAttribute('readonly')
     expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull()
-  })
-})
-
-describe('permissions (mock)', () => {
-  it('admins change grants in the mock; builders cannot; another organisation cannot see the id', async () => {
-    const tree = await mockPortal.content.tree(director)
-    const id = tree.find((n) => n.kind === 'dashboard')!.id
-    const rows = [{ principal: 'mock.analyst9', kind: 'user' as const, access: 'view' as const, via: 'Direct grant' }]
-    expect(await mockPortal.dashboards.setGrants(builder, id, rows)).toMatchObject({ ok: false, code: 'forbidden' })
-    expect(await mockPortal.dashboards.setGrants(orgAdmin, id, rows)).toMatchObject({ ok: true })
-    expect(await mockPortal.dashboards.grants(builder, id)).toEqual(rows)
-    expect((await mockPortal.dashboards.get(orgAdmin, id))!.grants).toEqual(rows)
-    const other = { ...director, org: { ...director.org, id: 'mock-org-adars', slug: 'adars', name: 'ADARS' } }
-    expect(await mockPortal.dashboards.grants(other, id)).toBeNull()
-    await expect(mockPortal.dashboards.setGrants(viewer, id, rows)).rejects.toThrow('forbidden')
   })
 })
