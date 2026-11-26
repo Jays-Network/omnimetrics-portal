@@ -14,6 +14,8 @@ import SqlTerminal from '@/components/builder/sql-terminal'
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
 const org = (slug: string, role: Role, isPlatform = false): OrgAccess => ({ org: { id: `mock-org-${slug}`, slug, name: slug, status: 'active' }, role, isPlatform, capabilities: capabilitiesFor(role, isPlatform) })
+const director = org('worldrisk', 'admin', true)
+const orgAdmin = org('worldrisk', 'admin')
 const builder = org('worldrisk', 'builder')
 const viewer = org('worldrisk', 'viewer')
 
@@ -157,5 +159,106 @@ describe('versions: append-only save and restore', () => {
   it('the mock store validates the spec (no SQL, no unknown keys)', () => {
     const r = saveMockVersion(ctx, 'wr-d3', { spec: { ...emptyDash(), sql: 'drop table x' } }, 'a')
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('SQL terminal (R7, mock)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('starts collapsed and remembers its state', async () => {
+    const first = render(<SqlTerminal orgName="WorldRisk" />)
+    const btn = () => screen.getByRole('button', { name: /sql terminal/i })
+    expect(btn()).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(btn())
+    expect(btn()).toHaveAttribute('aria-expanded', 'true')
+    first.unmount()
+    render(<SqlTerminal orgName="WorldRisk" />)
+    await waitFor(() => expect(btn()).toHaveAttribute('aria-expanded', 'true'))
+  })
+
+  it('is visible to the director only', () => {
+    expect(canSeeTerminal(director.capabilities)).toBe(true)
+    for (const a of [orgAdmin, builder, viewer]) expect(canSeeTerminal(a.capabilities)).toBe(false)
+  })
+
+  it('renders for the director with the R1 label and row cap, and runs canned rows', () => {
+    render(<SqlTerminal orgName="WorldRisk" />)
+    fireEvent.click(screen.getByRole('button', { name: /sql terminal/i }))
+    expect(screen.getByText(/unfiltered by R1/i)).toBeInTheDocument()
+    expect(screen.getByText(/Row cap: 1[ , ]?000/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /run/i }))
+    expect(screen.getByText(/MOCK result/)).toBeInTheDocument()
+    expect(screen.getAllByRole('row').length).toBeGreaterThan(5)
+  })
+
+  it('shows mocked parser rejections in the UI', () => {
+    render(<SqlTerminal orgName="WorldRisk" />)
+    fireEvent.click(screen.getByRole('button', { name: /sql terminal/i }))
+    fireEvent.change(screen.getByLabelText(/one select statement/i), { target: { value: 'UPDATE units SET x = 1' } })
+    fireEvent.click(screen.getByRole('button', { name: /run/i }))
+    expect(screen.getByRole('alert')).toHaveTextContent(/only SELECT/i)
+  })
+
+  it('rejects non-SELECT, multiple statements, forbidden functions and locking; accepts a plain SELECT', () => {
+    expect(checkSql('UPDATE a SET b = 1')).toMatchObject({ ok: false })
+    expect(checkSql('DELETE FROM a')).toMatchObject({ ok: false })
+    expect(checkSql('select 1; select 2')).toMatchObject({ ok: false, reason: expect.stringMatching(/more than one/) })
+    expect(checkSql('select pg_sleep(10)')).toMatchObject({ ok: false, reason: expect.stringMatching(/pg_sleep/) })
+    expect(checkSql('select pg_read_file(\'/etc/passwd\')')).toMatchObject({ ok: false })
+    expect(checkSql('select lo_import(\'x\')')).toMatchObject({ ok: false })
+    expect(checkSql('select * from a for update')).toMatchObject({ ok: false })
+    expect(checkSql('select * into b from a')).toMatchObject({ ok: false })
+    expect(checkSql('with x as (delete from a returning *) select * from x')).toMatchObject({ ok: false })
+    expect(checkSql('select 1; -- trailing comment only')).toEqual({ ok: true })
+    expect(checkSql("select ';' as semi, 'update' as word")).toEqual({ ok: true }) // literals are not code
+    expect(checkSql('select 1;')).toEqual({ ok: true })
+    expect(runMock('drop table a')).toMatchObject({ ok: false })
+    const r = runMock('select * from a')
+    expect(r.ok && r.result.rows.length).toBeGreaterThan(0)
+  })
+})
+
+describe('block panel UI', () => {
+  it('shows only the allowed palette chips, adds a block live and flags an incomplete one', async () => {
+    const { BlocksPanel } = await import('@/components/builder/blocks-panel')
+    const seen: unknown[] = []
+    function Host({ chart }: { chart: string }) {
+      return <BlocksPanel panelId="p" spec={defaultSpec(chart)} onChange={(s) => seen.push(s)} />
+    }
+    const { unmount } = render(<Host chart="stat" />)
+    const add = screen.getByRole('group', { name: /add a block/i })
+    expect(add).toHaveTextContent('Filter')
+    expect(add).toHaveTextContent('Measure')
+    expect(add).not.toHaveTextContent('Group by') // a stat takes no group by
+    unmount()
+    render(<Host chart="bar-grouped" />)
+    fireEvent.click(screen.getByRole('button', { name: /add.*group by|^\s*Group by/i }))
+    expect(seen.length).toBeGreaterThan(0)
+    expect((seen[seen.length - 1] as { groupBy: unknown[] }).groupBy).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /Filter/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Enter a value/)
+  })
+})
+
+describe('editor chrome', () => {
+  it('unsaved-changes dialog offers Save and exit, Discard and Cancel; Esc cancels', async () => {
+    const { ExitDialog } = await import('@/components/builder/builder')
+    const calls: string[] = []
+    render(<ExitDialog busy={false} onSave={() => calls.push('save')} onDiscard={() => calls.push('discard')} onCancel={() => calls.push('cancel')} />)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save and exit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(calls).toEqual(['save', 'discard', 'cancel'])
+  })
+
+  it('terminal resize is keyboard-operable and capped', () => {
+    render(<SqlTerminal orgName="WorldRisk" capPx={() => 300} />)
+    fireEvent.click(screen.getByRole('button', { name: /sql terminal/i }))
+    const sep = screen.getByRole('separator')
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(sep, { key: 'ArrowUp' })
+    expect(Number(sep.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(300)
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(sep, { key: 'ArrowDown' })
+    expect(Number(sep.getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(96)
   })
 })
