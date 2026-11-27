@@ -84,3 +84,17 @@ Made while building the pg layer; Jay to confirm or overrule before the cut-over
 - The **nearest** grant wins (node, folders upwards, organisation-wide), so a grant can narrow. A viewer never exceeds view. `manage` gives a builder nothing beyond `edit`: only org admins and the director change grants.
 - Deleting a folder needs edit access on everything live inside it, so a narrowed item cannot be deleted through its parent.
 - A suspended or archived organisation is closed to everyone, the director included (the mock still lets the director in).
+
+## M5 stage 2b decisions (2026-11-26; accounts and portal content only, no tracking number changes)
+Made while building; Jay to confirm or overrule before the cut-over.
+- **S1.** A login created from the portal gets legacy `app_users.role = 'viewer'`, whatever its organisation role. The legacy column still means "global admin, unfiltered" to `loadUser` (and director to the mock); the organisation role lives only in the membership.
+- **S2.** An org admin cannot reset the password of a login that also has a membership (active or not) in another organisation: they could sign in as it and enter that organisation. The director can. Answering this needs one yes/no read over the platform role.
+- **S3.** Nobody resets their own password through the admin screen (it would skip the current-password check).
+- **S4.** New passwords: 12 characters minimum as before, and at most 72 bytes (bcrypt ignores the rest; the login form also stops at 128 characters).
+- **S5.** Username and email conflicts are checked case-insensitively, with one message for all cases, "already a member" included.
+- **S6.** An organisation admin still sees their OWN organisation's profile (read over the tenant path); listing all, creating and updating are director only.
+- **S7.** Platform actions on one organisation (create, update, link) are audited with that organisation's `org_id`, so its admins can see them; system settings and password changes have `org_id` NULL. User-scope settings are not audited.
+- **S8.** Platform admins' memberships cannot be changed or reset through the portal by anyone.
+- **S9.** `loadUser` no longer reads `app_user_projects`: non-admins get `allowed_projects = []`, the legacy admin keeps `null`. Nothing renders tracking data from it yet.
+- **S10.** Until 009 is applied, login events are still written in the 001 shape (address inside `detail`), so no audit is lost.
+- **S11.** The audit address comes from `X-Real-IP` only. The login rate limiter is unchanged (it still falls back to `X-Forwarded-For`).

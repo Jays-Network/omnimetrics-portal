@@ -1,0 +1,15 @@
+-- 012_session_version.down.sql.example
+-- Rollback of 012. RUN AS: jaysnet_admin. Roll back BEFORE 010's rollback.
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.down.sql.example
+--
+-- Dropping the column also removes its column-level grant. DATA LOSS: the version counters only (once an
+-- app release uses them, roll that release back first; tokens it revoked would become valid until expiry).
+--
+-- CHECK AFTER: SELECT count(*) FROM information_schema.columns
+--                WHERE table_name='app_users' AND column_name='token_version';   -- 0
+
+BEGIN;
+
+ALTER TABLE app_users DROP COLUMN IF EXISTS token_version;
+
+COMMIT;

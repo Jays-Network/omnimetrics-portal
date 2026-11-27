@@ -12,9 +12,12 @@ import { normalizeSpec, type DashVersion } from '@/lib/builder/model'
 import * as admin from './admin'
 
 // MOCK DATA: development only (see ../index.ts). Obviously fake, deterministic.
+/** `archived` is closed, like `suspended`. */
+const closed = (s: 'active' | 'suspended' | 'archived'): 'active' | 'suspended' => (s === 'active' ? 'active' : 'suspended')
 const orgSummaries = (): OrgSummary[] => admin.listOrgs().map((o) => {
-  const p = admin.organisations.list({ org: o, role: 'admin', isPlatform: true, capabilities: capabilitiesFor('admin', true) })
-  return p.ok ? p.orgs.find((x) => x.id === o.id)! : { id: o.id, slug: o.slug, name: o.name, status: o.status, memberCount: 0, integrationCount: 0, dashboardCount: 0 }
+  const p = admin.organisations.list({ org: { ...o, status: closed(o.status) }, role: 'admin', isPlatform: true, capabilities: capabilitiesFor('admin', true) })
+  const found = p.ok ? p.orgs.find((x) => x.id === o.id) : undefined
+  return found ? { ...found, status: closed(found.status) } : { id: o.id, slug: o.slug, name: o.name, status: closed(o.status), memberCount: 0, integrationCount: 0, dashboardCount: 0 }
 })
 
 /**

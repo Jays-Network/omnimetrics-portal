@@ -2,9 +2,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { ROLES } from '@omnimetrics/types'
+import { BCRYPT_COST } from '@/lib/admin/password'
 import { getDb } from '@/lib/db'
 import { getCurrentUserById, invalidateUserCache, setAuthCookie, signToken } from '@/lib/auth'
-import { writeAuditLog } from '@/lib/audit'
+import { writeAudit } from '@/lib/audit'
 import {
   clearFailures,
   getClientIp,
@@ -13,8 +14,6 @@ import {
   recordFailure,
   retryAfterSeconds,
 } from '@/lib/rate-limit'
-
-const BCRYPT_COST = 12
 
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(100),
@@ -79,20 +78,22 @@ export async function POST(request: NextRequest) {
   if (!row || !passwordOk || !row.is_active || !roleOk) {
     const failureCount = recordFailure(limiterKey)
     const reason = !row ? 'unknown_user' : !passwordOk ? 'bad_password' : !row.is_active ? 'inactive' : 'invalid_role'
-    await writeAuditLog(row?.id ?? null, 'login_failure', {
-      username,
-      ip,
-      reason,
-      locked_out: failureCount >= MAX_FAILED_ATTEMPTS,
+    await writeAudit({
+      userId: row?.id ?? null,
+      action: 'login_failure',
+      targetType: 'user',
+      targetId: row?.id,
+      detail: { username, reason, locked_out: failureCount >= MAX_FAILED_ATTEMPTS },
+      ip: request.headers.get('x-real-ip'),
     })
     return NextResponse.json(INVALID, { status: 401 })
   }
 
-  // Identity only: role and allowed_projects are loaded from the DB by requireAuth().
+  // Identity only: role and allowed_projects are derived from the DB by requireAuth().
   const token = await signToken({ sub: row.id })
 
   clearFailures(limiterKey)
-  await writeAuditLog(row.id, 'login_success', { username: row.username, ip })
+  await writeAudit({ userId: row.id, action: 'login_success', targetType: 'user', targetId: row.id, detail: { username: row.username }, ip: request.headers.get('x-real-ip') })
 
   // Warm requireAuth's cache with fresh permissions for this login.
   invalidateUserCache(row.id)

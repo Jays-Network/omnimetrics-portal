@@ -1,0 +1,73 @@
+-- 012_session_version.sql.example
+-- app_users.token_version: the schema half of ending sessions (password change/reset, revoke). A later
+-- app release puts it in the JWT and compares it on load. NO APP CODE USES IT YET: do not apply before
+-- Jay has reviewed it.
+--
+-- RUN AS:  jaysnet_admin (owner of app_users).   After 010 (011 is independent).
+--   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.sql.example
+--   Optional: -v app_role=<role>        (default portal_app; the test database uses portal_test_app)
+--             -v platform_role=<role>   (default portal_platform; portal_test_platform)
+-- Rollback: 012_session_version.down.sql.example
+--
+-- Touches app_users only: one column and one column-level UPDATE grant to the app role. Nothing else.
+-- SELECT comes from the existing table-level grant (010). No INSERT grant: new logins take the default 0.
+-- The platform role gets nothing. Existing rows get 0 (no table rewrite for a constant default).
+--
+-- CHECKS AFTER RUNNING:
+--   SELECT data_type, is_nullable, column_default FROM information_schema.columns
+--     WHERE table_name='app_users' AND column_name='token_version';              -- integer, NO, 0
+--   SELECT count(*) FROM app_users WHERE token_version <> 0;                      -- 0
+--   SELECT has_column_privilege('portal_app','app_users','token_version','UPDATE'),      -- t
+--          has_column_privilege('portal_app','app_users','token_version','INSERT'),      -- f
+--          has_table_privilege('portal_app','app_users','UPDATE'),                       -- f
+--          has_column_privilege('portal_app','app_users','is_platform_admin','UPDATE'),  -- f
+--          has_any_column_privilege('portal_platform','app_users','SELECT,UPDATE');      -- f
+
+\if :{?app_role}
+\else
+    \set app_role portal_app
+\endif
+\if :{?platform_role}
+\else
+    \set platform_role portal_platform
+\endif
+
+BEGIN;
+
+SELECT set_config('app.migr_role', :'app_role', true),
+       set_config('app.migr_platform_role', :'platform_role', true);
+
+-- pre-condition: 010 is applied (otherwise the app role still holds the table-wide UPDATE of 003)
+DO $$
+DECLARE r text := current_setting('app.migr_role');
+BEGIN
+    IF to_regprocedure('app_is_platform()') IS NULL OR has_table_privilege(r, 'app_users', 'UPDATE') THEN
+        RAISE EXCEPTION '012: apply 010 first (% must have only column-level UPDATE on app_users)', r;
+    END IF;
+END $$;
+
+ALTER TABLE app_users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+
+GRANT UPDATE (token_version) ON app_users TO :"app_role";
+
+DO $$
+DECLARE
+    r text := current_setting('app.migr_role');
+    p text := current_setting('app.migr_platform_role');
+BEGIN
+    IF NOT has_column_privilege(r, 'app_users', 'token_version', 'UPDATE')
+       OR NOT has_column_privilege(r, 'app_users', 'token_version', 'SELECT') THEN
+        RAISE EXCEPTION '012: % cannot read and update token_version', r;
+    END IF;
+    IF has_column_privilege(r, 'app_users', 'token_version', 'INSERT') OR has_table_privilege(r, 'app_users', 'UPDATE') THEN
+        RAISE EXCEPTION '012: % holds more than the column UPDATE', r;
+    END IF;
+    IF has_column_privilege(r, 'app_users', 'is_platform_admin', 'UPDATE') OR has_column_privilege(r, 'app_users', 'is_platform_admin', 'INSERT') THEN
+        RAISE EXCEPTION '012: % can write app_users.is_platform_admin', r;
+    END IF;
+    IF has_any_column_privilege(p, 'app_users', 'SELECT,INSERT,UPDATE') THEN
+        RAISE EXCEPTION '012: % holds a privilege on app_users', p;
+    END IF;
+END $$;
+
+COMMIT;

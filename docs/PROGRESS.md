@@ -85,3 +85,9 @@ Rulings recorded: R7 (SQL terminal is director-only; CLAUDE.md hard rule updated
 ## Next
 - Jay reviews M1, then "approved" for M2 (org switcher refinements, content tree, dashboards list/viewer on mock data).
 - Step 3 stays parked until M5 (needs the per-org reader roles first).
+
+
+- **M5 stage 2b (2026-11-26): pg organisations, users/memberships, settings, password change/reset, org-aware audit, new `loadUser`. Not committed.** `PORTAL_DATA` stays `mock`; production still refuses mock and pg.
+  - Code: `lib/portal/pg/{organisations,users,account,settings}.ts`, `lib/audit.ts` (`writeAudit`), `lib/admin/password.ts`, `loadUser` reads `app_users` only, routes now `await` and pass `X-Real-IP`, new `op: "link"` (director) on the users route. Mock follows the same rules. `012_session_version` written, NOT applied, no app code.
+  - Tests: typecheck clean, `pnpm test` 305 green. `pnpm test:db` 63 of 66 green; the 3 linking tests wait for a rebuild (`itest_linkable`, M5_APPLY_CHECKLIST section 8). `pnpm build` not run (dev server).
+  - Open before cut-over: the Users/Accounts screens do not yet SHOW the one-time password (and still say "mock"); no sessions list/revoke (012); director's cross-organisation memberships view and tracking-scope editing not built in pg; DECISIONS S1 to S11 await Jay.

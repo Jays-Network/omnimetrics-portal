@@ -18,6 +18,11 @@ export interface OrgSummary extends Org {
   dashboardCount: number
 }
 
+/** The mock's admin signatures, where an implementation may also answer asynchronously (pg does). */
+export type Service<T> = {
+  [K in keyof T]: T[K] extends (...args: infer P) => infer R ? (...args: P) => R | Promise<R> : Service<T[K]>
+}
+
 /**
  * The single data-access interface (docs/PLAN_BUILDER.md section C). M1 covers
  * organisations only; content, dashboards, integrations, settings and admin
@@ -39,13 +44,13 @@ export interface Portal {
     /** One tree mutation; permission, depth and name rules are enforced here, not in the UI. */
     apply(ctx: OrgAccess, op: ContentOp): Promise<ContentResult>
   }
-  /** M4 admin surface (mock). Typed from the mock module until the pg implementation arrives in M5. */
+  /** M4 admin surface. Typed from the mock module; callers always `await`. */
   integrations: typeof A.integrations
-  organisations: typeof A.organisations
-  users: typeof A.users
-  accounts: typeof A.accounts
-  account: typeof A.account
-  settings: typeof A.settings
+  organisations: Service<typeof A.organisations>
+  users: Service<typeof A.users>
+  accounts: Service<typeof A.accounts>
+  account: Service<typeof A.account>
+  settings: Service<typeof A.settings>
   dashboards: {
     /** A dashboard of this organisation, or null (also for ids of other organisations). */
     get(ctx: OrgAccess, nodeId: string): Promise<DashboardView | null>

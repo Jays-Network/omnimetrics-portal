@@ -7,6 +7,6 @@ import { requireOrgPage } from '@/lib/portal/org'
 export default async function OrgLayout({ children, params }: { children: ReactNode; params: Promise<{ orgSlug: string }> }) {
   const { orgSlug } = await params
   const { access, portal, user } = await requireOrgPage(orgSlug, 'settings.view')
-  const r = portal.settings.get(access, { id: user.id, username: user.username })
+  const r = await portal.settings.get(access, { id: user.id, username: user.username })
   return r.ok ? <FormatProvider settings={r.view.effective.value}>{children}</FormatProvider> : <>{children}</>
 }

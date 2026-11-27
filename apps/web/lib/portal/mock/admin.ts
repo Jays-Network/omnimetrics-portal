@@ -1,20 +1,24 @@
-import type { Capability, OrgAccess } from '@omnimetrics/types'
+import type { Capability, OrgAccess, Role } from '@omnimetrics/types'
+import { LAST_ADMIN, NAME_UNAVAILABLE, OWN_MEMBERSHIP, OWN_RESET, SHARED_LOGIN, WRONG_CURRENT, newOneTimePassword, passwordProblem } from '@/lib/admin/password'
 import type { AllowedHost, AuditEntry, HostInput, IntegrationInput, IntegrationRow, MemberRow, Membership, OrgProfile, Result, SessionRow } from '@/lib/admin/types'
 import { redact } from '@/lib/admin/redact'
-import { resolveSettings, type PartialSettings, type Resolved, type Scope, type SettingKey } from '@/lib/settings/model'
+import { PartialSettingsSchema, SETTING_KEYS, resolveSettings, type PartialSettings, type Resolved, type Scope, type SettingKey } from '@/lib/settings/model'
 import { LOCAL_ROW, FOLDERS, clock, db, nextId, type MMember } from './admin-store'
 
 // MOCK implementation of the M4 admin surface. Every function takes the verified OrgAccess first and checks
 // the capability itself (the UI and the routes are not the boundary). Other organisations' ids look like
 // "not_found", never "forbidden" (existence is not confirmed). Secrets never leave the vault (redaction + tests).
 type Ctx = Pick<OrgAccess, 'org' | 'role' | 'isPlatform' | 'capabilities'>
-export interface Actor { id: string; username: string }
+export interface Actor { id: string; username: string; ip?: string | null }
 
 const forbid = (): Result<never> => ({ ok: false, code: 'forbidden', error: 'Not allowed.' })
 const notFound = (what = 'Not found'): Result<never> => ({ ok: false, code: 'not_found', error: what })
 const invalid = (error: string): Result<never> => ({ ok: false, code: 'invalid', error })
 const can = (c: Ctx, cap: Capability) => c.capabilities.includes(cap)
 const nowIso = () => new Date(clock.now()).toISOString()
+
+/** The organisation an audit row of a platform action belongs to. */
+const orgOf = (id: string): Ctx => ({ org: { id } as Ctx['org'], role: 'admin', isPlatform: true, capabilities: [] })
 
 function audit(c: Ctx | null, actor: Actor, action: string, targetType: string, targetId: string, detail: Record<string, unknown> = {}) {
   const e: AuditEntry = { id: nextId('a'), at: nowIso(), orgId: c?.org.id ?? null, actor: actor.username, action, targetType, targetId, detail: JSON.stringify(redact(detail)) }
@@ -134,20 +138,22 @@ export const organisations = {
     const all = can(c, 'orgs.manage')
     return { ok: true, orgs: db().orgs.filter((o) => all || o.id === c.org.id).map(profile) }
   },
-  create(c: Ctx, actor: Actor, name: string): Result<{ org: OrgProfile }> {
+  create(c: Ctx, actor: Actor, name: string, wanted?: string): Result<{ org: OrgProfile }> {
     if (!can(c, 'orgs.manage')) return forbid()
     const n = name.trim()
     if (n.length < 2 || n.length > 60) return invalid('Name must be 2 to 60 characters.')
     if (db().orgs.some((o) => o.name.toLowerCase() === n.toLowerCase())) return invalid('An organisation with that name exists.')
-    let slug = n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'org'
+    if (wanted !== undefined && !/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/.test(wanted)) return invalid('Slug: lower-case letters, digits and hyphens (1 to 40), not starting or ending with a hyphen.')
+    if (wanted !== undefined && db().orgs.some((o) => o.slug === wanted)) return invalid('That address (slug) is already used.')
+    let slug = wanted ?? (n.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 36).replace(/^-|-$/g, '') || 'org')
     while (db().orgs.some((o) => o.slug === slug)) slug += '-2'
     const o = { id: nextId('mock-org'), slug, name: n, status: 'active' as const, dashboards: 0 }
     db().orgs.push(o)
     db().integrations.set(o.id, [{ ...LOCAL_ROW, lastTest: null }])
-    audit(null, actor, 'org.create', 'org', o.id, { name: n })
+    audit(orgOf(o.id), actor, 'org.create', 'org', o.id, { name: n, slug })
     return { ok: true, org: profile(o) }
   },
-  update(c: Ctx, actor: Actor, id: string, patch: { name?: string; status?: 'active' | 'suspended' }): Result<{ org: OrgProfile }> {
+  update(c: Ctx, actor: Actor, id: string, patch: { name?: string; status?: 'active' | 'suspended' | 'archived' }): Result<{ org: OrgProfile }> {
     if (!can(c, 'orgs.manage')) return forbid()
     const o = db().orgs.find((x) => x.id === id)
     if (!o) return notFound()
@@ -158,7 +164,7 @@ export const organisations = {
       o.name = n
     }
     if (patch.status) o.status = patch.status
-    audit(null, actor, 'org.update', 'org', id, { ...patch })
+    audit(orgOf(id), actor, 'org.update', 'org', id, { ...(patch.name !== undefined ? { name: o.name } : {}), ...(patch.status ? { status: patch.status } : {}) })
     return { ok: true, org: profile(o) }
   },
 }
@@ -172,38 +178,56 @@ const directorRow = (): MemberRow => {
   return { userId: u.id, username: u.username, email: u.email, role: 'admin', active: true, isPlatform: true, grantsSummary: 'Platform admin: everything, every organisation', trackingFolders: null }
 }
 const orgMember = (c: Ctx, userId: string) => db().members.find((m) => m.orgId === c.org.id && m.userId === userId)
+function newMember(orgId: string, userId: string, role: Role): MMember {
+  const m: MMember = { userId, orgId, role, active: true, folders: role === 'admin' ? null : [], grants: role === 'admin' ? 'Everything in this organisation' : 'No grants yet' }
+  db().members.push(m)
+  return m
+}
 
 export const users = {
   /** Members of THIS organisation with the role and scope they hold HERE (a shared user shows only this org's). */
   list(c: Ctx): Result<{ members: MemberRow[]; folders: string[] }> {
-    if (!can(c, 'admin.view')) return forbid()
+    if (!can(c, 'admin.view')) return notFound()
     return { ok: true, members: [directorRow(), ...db().members.filter((m) => m.orgId === c.org.id).map(memberRow)], folders: [...(FOLDERS[c.org.slug] ?? [])] }
   },
-  add(c: Ctx, actor: Actor, i: { username: string; email: string; role: 'admin' | 'builder' | 'viewer' }): Result<{ member: MemberRow }> {
-    if (!can(c, 'admin.view')) return forbid()
-    let u = db().users.find((x) => x.username === i.username)
-    if (u?.isPlatform) return invalid('That username is reserved.')
-    if (u && orgMember(c, u.id)) return invalid('That person is already a member of this organisation.')
-    if (!u) { u = { id: nextId('u'), username: i.username, email: i.email, isPlatform: false }; db().users.push(u) }
-    const m: MMember = { userId: u.id, orgId: c.org.id, role: i.role, active: true, folders: i.role === 'admin' ? null : [], grants: i.role === 'admin' ? 'Everything in this organisation' : 'No grants yet' }
-    db().members.push(m)
+  /** NEW logins only; the same answer for any taken username or email. */
+  add(c: Ctx, actor: Actor, i: { username: string; email: string; role: Role }): Result<{ member: MemberRow; oneTimePassword: string }> {
+    if (!can(c, 'admin.view')) return notFound()
+    if (db().users.some((x) => x.username.toLowerCase() === i.username.toLowerCase() || x.email.toLowerCase() === i.email.toLowerCase())) return invalid(NAME_UNAVAILABLE)
+    const u = { id: nextId('u'), username: i.username, email: i.email, isPlatform: false }
+    db().users.push(u)
+    const m = newMember(c.org.id, u.id, i.role)
+    const oneTimePassword = newOneTimePassword()
+    db().passwords.set(u.id, oneTimePassword)
     audit(c, actor, 'user.add', 'user', u.id, { username: u.username, role: i.role })
-    return { ok: true, member: memberRow(m) }
+    return { ok: true, member: memberRow(m), oneTimePassword }
   },
-  update(c: Ctx, actor: Actor, userId: string, patch: { role?: 'admin' | 'builder' | 'viewer'; active?: boolean; trackingFolders?: string[] }): Result<{ member: MemberRow }> {
-    if (!can(c, 'admin.view')) return forbid()
+  /** Director only: an existing login joins this organisation. */
+  link(c: Ctx, actor: Actor, i: { username: string; role: Role }): Result {
+    if (!can(c, 'admin.view')) return notFound()
+    if (!can(c, 'orgs.manage')) return forbid()
+    const u = db().users.find((x) => x.username === i.username)
+    if (!u) return invalid('No active login has that username.')
+    if (u.isPlatform) return invalid('A platform admin already has access to every organisation.')
+    if (orgMember(c, u.id)) return invalid('That person is already a member of this organisation.')
+    newMember(c.org.id, u.id, i.role)
+    audit(c, actor, 'user.link', 'user', u.id, { username: u.username, role: i.role })
+    return { ok: true }
+  },
+  update(c: Ctx, actor: Actor, userId: string, patch: { role?: Role; active?: boolean; trackingFolders?: string[] }): Result<{ member: MemberRow }> {
+    if (!can(c, 'admin.view')) return notFound()
     if (db().users.find((u) => u.id === userId)?.isPlatform && orgMember(c, userId) === undefined) return forbid() // nobody edits a platform admin
     const m = orgMember(c, userId)
     if (!m) return notFound() // not a member here, or a user id from another organisation
-    if (userId === actor.id) return invalid('You cannot change your own role or deactivate yourself.')
+    if (userId === actor.id) return invalid(OWN_MEMBERSHIP)
+    const leaves = m.role === 'admin' && m.active && ((patch.role !== undefined && patch.role !== 'admin') || patch.active === false)
+    if (leaves && !db().members.some((x) => x !== m && x.orgId === c.org.id && x.role === 'admin' && x.active)) return invalid(LAST_ADMIN)
+    const known = FOLDERS[c.org.slug] ?? []
+    if (patch.trackingFolders?.some((f) => !known.includes(f))) return invalid('Unknown tracking folder.')
     if (patch.role) { m.role = patch.role; if (patch.role === 'admin') m.folders = null; else if (m.folders === null) m.folders = [] }
     if (patch.active !== undefined) m.active = patch.active
-    if (patch.trackingFolders) {
-      const known = FOLDERS[c.org.slug] ?? []
-      if (patch.trackingFolders.some((f) => !known.includes(f))) return invalid('Unknown tracking folder.')
-      if (m.role !== 'admin') m.folders = [...new Set(patch.trackingFolders)]
-    }
-    audit(c, actor, 'user.update', 'user', userId, { ...patch })
+    if (patch.trackingFolders && m.role !== 'admin') m.folders = [...new Set(patch.trackingFolders)]
+    audit(c, actor, 'user.update', 'user', userId, { ...(patch.role ? { role: patch.role } : {}), ...(patch.active !== undefined ? { active: patch.active } : {}), ...(patch.trackingFolders ? { trackingFolders: patch.trackingFolders } : {}) })
     return { ok: true, member: memberRow(m) }
   },
   /** Director only: one person across every organisation. */
@@ -232,12 +256,16 @@ export const accounts = {
     audit(c, actor, 'session.revoke', 'session', sessionId, { userId: s.userId })
     return { ok: true }
   },
-  resetPassword(c: Ctx, actor: Actor, userId: string): Result<{ message: string }> {
-    if (!can(c, 'admin.view')) return forbid()
+  resetPassword(c: Ctx, actor: Actor, userId: string): Result<{ message: string; oneTimePassword: string }> {
+    if (!can(c, 'admin.view')) return notFound()
     if (db().users.find((u) => u.id === userId)?.isPlatform) return forbid()
     if (!orgMember(c, userId)) return notFound()
+    if (userId === actor.id) return invalid(OWN_RESET)
+    if (!can(c, 'orgs.manage') && db().members.some((m) => m.userId === userId && m.orgId !== c.org.id)) return { ok: false, code: 'forbidden', error: SHARED_LOGIN }
+    const oneTimePassword = newOneTimePassword()
+    db().passwords.set(userId, oneTimePassword)
     audit(c, actor, 'user.password_reset', 'user', userId)
-    return { ok: true, message: 'Mock: a reset link would be emailed. Nothing was sent and no password changed.' }
+    return { ok: true, message: 'Mock: a one-time password was generated. It signs in nowhere.', oneTimePassword }
   },
 }
 
@@ -257,9 +285,14 @@ export const account = {
     return { ok: true }
   },
   changePassword(actor: Actor, current: string, next: string): Result<{ message: string }> {
-    if (!current) return invalid('Enter your current password.')
-    if (next.length < 12) return invalid('Use at least 12 characters.')
-    if (next === current) return invalid('The new password must differ from the current one.')
+    const problem = passwordProblem(current, next)
+    if (problem) return invalid(problem)
+    // Only passwords the mock generated are known here; a real person's input is never kept.
+    const known = db().passwords.get(actor.id)
+    if (known !== undefined) {
+      if (current !== known) return invalid(WRONG_CURRENT)
+      db().passwords.set(actor.id, next)
+    }
     audit(null, actor, 'user.password_change', 'user', actor.id) // never the password itself
     return { ok: true, message: 'Mock: nothing was changed. The real change arrives with the database in M5.' }
   },
@@ -286,6 +319,7 @@ export const settings = {
   set(c: Ctx, actor: Actor, scope: Scope, set: PartialSettings, unset: SettingKey[] = []): Result<{ view: SettingsView }> {
     const need: Capability = scope === 'system' ? 'settings.system' : scope === 'org' ? 'settings.org' : 'settings.view'
     if (!can(c, need)) return forbid()
+    if (!PartialSettingsSchema.safeParse(set).success || unset.some((k) => !SETTING_KEYS.includes(k))) return invalid('Unknown setting or value.')
     const target: PartialSettings = scope === 'system' ? db().settings.system : scope === 'org' ? (db().settings.org.get(c.org.id) ?? (db().settings.org.set(c.org.id, {}), db().settings.org.get(c.org.id)!)) : (db().settings.user.get(actor.id) ?? (db().settings.user.set(actor.id, {}), db().settings.user.get(actor.id)!))
     Object.assign(target, set)
     for (const k of unset) delete target[k]

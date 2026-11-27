@@ -3,11 +3,15 @@ import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ContentOp } from '@omnimetrics/types'
+import * as account from '@/lib/portal/pg/account'
 import * as content from '@/lib/portal/pg/content'
 import * as dashboards from '@/lib/portal/pg/dashboards'
 import { NotFound } from '@/lib/portal/pg/errors'
 import * as org from '@/lib/portal/pg/org'
+import * as organisations from '@/lib/portal/pg/organisations'
 import * as orgs from '@/lib/portal/pg/orgs'
+import * as settings from '@/lib/portal/pg/settings'
+import * as users from '@/lib/portal/pg/users'
 import { connect, startWorld, type Person, type World } from './harness'
 
 // The core of stage 2a: with A's ctx, B's ids behave exactly like ids that do not exist.
@@ -35,6 +39,8 @@ async function seed() {
   const del = await content.apply(bCtx, { op: 'delete', id: gone })
   if (!del.ok) throw new Error(del.error)
   b = { folder: bFolder, dash: bDash, deletedBatch: del.batchId! }
+  const set = await settings.set(bCtx, as(bCtx), 'org', { dateFormat: 'MDY' })
+  if (!set.ok) throw new Error(set.error)
 
   const aFolder = await make(aCtx, 'folder', null, `A ${tag}`)
   a = { folder: aFolder, dash: await make(aCtx, 'dashboard', aFolder, 'A board') }
@@ -43,12 +49,19 @@ async function seed() {
   actors = [aCtx, await w.ctx(w.aBuilder), await w.ctx(w.aViewer)]
 }
 
+/** The session actor behind a ctx. */
+const as = (ctx: org.OrgCtx) => ({ id: ctx.userId, username: 'actor' })
+
 const snapshot = () =>
   w.asOrg(w.orgB.id, async (tx) => ({
     nodes: await tx`SELECT * FROM app_content_nodes WHERE org_id = ${w.orgB.id} ORDER BY id`,
     versions: await tx`SELECT * FROM app_dashboard_versions WHERE org_id = ${w.orgB.id} ORDER BY id`,
     grants: await tx`SELECT * FROM app_grants WHERE org_id = ${w.orgB.id} ORDER BY id`,
     members: await tx`SELECT * FROM app_memberships WHERE org_id = ${w.orgB.id} ORDER BY id`,
+    logins: await tx`SELECT * FROM app_users WHERE id = ${w.bAdmin.id}`,
+    settings: await tx`SELECT * FROM app_settings WHERE org_id = ${w.orgB.id} ORDER BY id`,
+    audit: await tx`SELECT * FROM app_audit_log WHERE org_id = ${w.orgB.id} ORDER BY id`,
+    org: await tx`SELECT * FROM app_orgs WHERE id = ${w.orgB.id}`,
   }))
 
 /** A value or the message it threw, so "same answer" can be compared. */
@@ -149,9 +162,122 @@ const matrix: Record<string, () => Promise<void>> = {
     expect(() => org.assertOrgCtx(forged)).toThrow(/requireOrg/)
     await expect(content.tree(forged)).rejects.toThrow(/requireOrg/)
   },
+  'organisations.list': async () => {
+    const own = await organisations.list(actors[0]!)
+    expect(own.ok && own.orgs.map((o) => o.id)).toEqual([w.orgA.id])
+    noForeign(own)
+    for (const ctx of actors.slice(1)) expect(await organisations.list(ctx)).toMatchObject({ ok: false, code: 'forbidden' })
+  },
+  'organisations.create': async () => {
+    for (const ctx of actors) expect(await organisations.create(ctx, as(ctx), 'Planted org')).toMatchObject({ ok: false, code: 'forbidden' })
+  },
+  'organisations.update': async () => sameAsMissing((ctx, id) => organisations.update(ctx, as(ctx), id, { name: 'Hacked', status: 'suspended' }), w.orgB.id),
+  'users.list': async () => {
+    const mine = await users.list(actors[0]!)
+    expect(mine.ok && mine.members.map((m) => m.userId)).toContain(w.aViewer.id)
+    noForeign(mine)
+    for (const ctx of actors.slice(1)) expect(await users.list(ctx)).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'users.add': async () => {
+    // There is no organisation argument; B's username answers like any other taken one.
+    const input = (username: string) => ({ username, email: `${username}-x@example.test`, role: 'admin' as const })
+    const admin = actors[0]!
+    const foreign = await users.add(admin, as(admin), input(w.bAdmin.username))
+    expect(foreign).toMatchObject({ ok: false, code: 'invalid' })
+    expect(foreign).toEqual(await users.add(admin, as(admin), input(w.aViewer.username)))
+    for (const ctx of actors.slice(1)) expect(await users.add(ctx, as(ctx), input('planted.user'))).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'users.link': async () => {
+    for (const ctx of actors) {
+      expect(await users.link(ctx, as(ctx), { username: w.bAdmin.username, role: 'viewer' })).toMatchObject({ ok: false, code: ctx.role === 'admin' ? 'forbidden' : 'not_found' })
+    }
+  },
+  'users.update': async () => {
+    await sameAsMissing((ctx, id) => users.update(ctx, as(ctx), id, { active: false }), w.bAdmin.id)
+    await sameAsMissing((ctx, id) => users.update(ctx, as(ctx), id, { role: 'viewer' }), w.bAdmin.id)
+  },
+  'account.resetPassword': async () => sameAsMissing((ctx, id) => account.resetPassword(ctx, as(ctx), id), w.bAdmin.id),
+  // Takes the session actor, never an id from the request: A's people can only ever reach their own login.
+  'account.changePassword': async () => {
+    for (const ctx of actors) expect(await account.changePassword(as(ctx), 'not-the-password', 'a-long-new-password')).toMatchObject({ ok: false, code: 'invalid' })
+  },
+  'settings.get': async () => {
+    for (const ctx of actors) {
+      const r = await settings.get(ctx)
+      expect(r.ok && r.view.org).toEqual({})
+      noForeign(r)
+    }
+  },
+  'settings.set': async () => {
+    const [admin, builder, viewer] = actors as [org.OrgCtx, org.OrgCtx, org.OrgCtx]
+    expect(await settings.set(admin, as(admin), 'org', { dateFormat: 'long' })).toMatchObject({ ok: true })
+    for (const ctx of [builder, viewer]) expect(await settings.set(ctx, as(ctx), 'org', { dateFormat: 'long' })).toMatchObject({ ok: false, code: 'forbidden' })
+    for (const ctx of actors) {
+      expect(await settings.set(ctx, as(ctx), 'system', { dateFormat: 'long' })).toMatchObject({ ok: false, code: 'forbidden' })
+      expect(await settings.set(ctx, as(ctx), 'user', { dateFormat: 'DMY' })).toMatchObject({ ok: true })
+    }
+  },
 }
 
-const modules = { content, dashboards, org, orgs }
+const modules = { account, content, dashboards, org, organisations, orgs, settings, users }
+
+type Call = () => Promise<unknown>
+const SECRETS = /hashed_?password|\$2[aby]\$/i
+
+describe('no repository function returns a password hash', () => {
+  /** One successful call per exported function, with the most privileged caller. A new export fails until it is here. */
+  const calls = async (): Promise<Record<string, Call>> => {
+    const admin = await w.ctx(w.aAdmin)
+    const director = await w.ctx(w.director)
+    const me = as(admin)
+    const boss = as(director)
+    const tag = randomUUID().slice(0, 8)
+    const added = await users.add(admin, me, { username: `scan.${tag}`, email: `scan.${tag}@example.test`, role: 'builder' })
+    if (!added.ok) throw new Error(added.error)
+    const member = added.member.userId
+    return {
+      'content.tree': () => content.tree(admin),
+      'content.apply': () => content.apply(admin, { op: 'create', kind: 'folder', parentId: null, name: `Scan ${tag}` }),
+      'dashboards.get': () => dashboards.get(admin, a.dash),
+      'dashboards.versions': () => dashboards.versions(admin, a.dash),
+      'dashboards.saveVersion': () => dashboards.saveVersion(admin, a.dash, { restore: 1 }, 'x'),
+      'dashboards.grants': () => dashboards.grants(admin, a.dash),
+      'dashboards.setGrants': () => dashboards.setGrants(admin, a.dash, []),
+      'orgs.listAccessible': () => orgs.listAccessible({ id: w.aAdmin.id, username: w.aAdmin.username, role: 'admin' }),
+      'orgs.listAll': () => orgs.listAll(),
+      'org.requireOrg': () => org.requireOrg(w.aAdmin, w.orgA.slug),
+      'org.assertOrgCtx': async () => org.assertOrgCtx(admin),
+      'organisations.list': () => organisations.list(director),
+      'organisations.create': () => organisations.create(director, boss, `Scan org ${tag}`),
+      'organisations.update': () => organisations.update(director, boss, w.orgA.id, {}),
+      'users.list': () => users.list(admin),
+      'users.add': async () => added,
+      'users.link': () => users.link(director, boss, { username: w.linkable.username, role: 'viewer' }),
+      'users.update': () => users.update(admin, me, member, { role: 'viewer' }),
+      'account.changePassword': () => account.changePassword({ id: member, username: added.member.username }, added.oneTimePassword, 'a-long-new-password'),
+      'account.resetPassword': () => account.resetPassword(admin, me, member),
+      'settings.get': () => settings.get(admin),
+      'settings.set': () => settings.set(admin, me, 'org', { timeFormat: '12' }),
+    }
+  }
+
+  beforeEach(async () => {
+    w = await startWorld()
+    await seed()
+  })
+  afterEach(() => w.close())
+
+  it('in any result', async () => {
+    const all = await calls()
+    const exported = Object.entries(modules).flatMap(([name, m]) => Object.entries(m).filter(([, v]) => typeof v === 'function').map(([fn]) => `${name}.${fn}`))
+    expect(Object.keys(all).sort()).toEqual(exported.sort())
+    for (const [name, call] of Object.entries(all)) {
+      const result = await call()
+      if (result && typeof result === 'object' && 'ok' in result) expect(result, name).toMatchObject({ ok: true })
+      expect(JSON.stringify(result ?? null), name).not.toMatch(SECRETS)
+    }
+  })
+})
 
 describe('isolation matrix: coverage', () => {
   it('has an entry for every exported repository function', () => {

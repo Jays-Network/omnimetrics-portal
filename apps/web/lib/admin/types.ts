@@ -57,7 +57,7 @@ export type HostInput = z.infer<typeof HostInputSchema>
 export interface AuditEntry { id: string; at: string; orgId: string | null; actor: string; action: string; targetType: string; targetId: string; detail: string }
 
 // ---- Admin
-export interface OrgProfile { id: string; slug: string; name: string; status: 'active' | 'suspended'; memberCount: number; integrationCount: number; dashboardCount: number }
+export interface OrgProfile { id: string; slug: string; name: string; status: 'active' | 'suspended' | 'archived'; memberCount: number; integrationCount: number; dashboardCount: number }
 export interface MemberRow {
   userId: string
   username: string
@@ -78,6 +78,12 @@ export const AddUserSchema = z.object({
   op: z.literal('add'),
   username: z.string().trim().min(3).max(40).regex(/^[a-z0-9._-]+$/, 'Lower-case letters, digits . _ -'),
   email: z.string().trim().email().max(120),
+  role: z.enum(['admin', 'builder', 'viewer']),
+}).strict()
+/** Director only: an existing login joins this organisation. */
+export const LinkUserSchema = z.object({
+  op: z.literal('link'),
+  username: z.string().trim().min(1).max(100),
   role: z.enum(['admin', 'builder', 'viewer']),
 }).strict()
 export const UserPatchSchema = z.object({

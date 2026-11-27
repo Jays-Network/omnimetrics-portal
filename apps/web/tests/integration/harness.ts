@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import postgres from 'postgres'
 import type { GrantAccess, Role } from '@omnimetrics/types'
+import { withPlatform } from '@/lib/portal/pg/context'
 import { requireOrg, type OrgCtx } from '@/lib/portal/pg/org'
 import { inAppTx, type Tx } from '@/lib/portal/pg/tx'
 
@@ -11,13 +12,15 @@ import { inAppTx, type Tx } from '@/lib/portal/pg/tx'
  *
  * The two roles cannot see each other's uncommitted rows, so users AND memberships are seeded through
  * portal_test_app (as smoke_m5 does). The platform administrator cannot be created by either role: it is
- * seeded once, as postgres, by db/test/rebuild_portal_test.sh.example.
+ * seeded once, as postgres, by db/test/rebuild_portal_test.sh.example, together with itest_linkable.
  */
 
 type Sql = ReturnType<typeof postgres>
 const g = globalThis as unknown as { __omniSqlApp?: unknown; __omniSqlPlatform?: unknown }
 
 export const DIRECTOR = 'itest_director'
+/** A committed login with no membership: the only kind the platform connection can link. */
+export const LINKABLE = 'itest_linkable'
 
 export async function connect(envName: 'TEST_DATABASE_URL_APP' | 'TEST_DATABASE_URL_PLATFORM'): Promise<Sql> {
   const url = process.env[envName]
@@ -82,10 +85,13 @@ export interface World {
   nobody: Person
   inactive: Person
   director: Person
+  linkable: Person
   ctx(who: Person, slug?: string): Promise<OrgCtx>
   grant(orgId: string, userId: string, nodeId: string | null, access: GrantAccess): Promise<void>
   /** Raw SQL inside one organisation's context (fixtures and "unchanged" snapshots). */
   asOrg<T>(orgId: string, fn: (tx: Tx) => Promise<T>): Promise<T>
+  /** Raw SQL over the platform connection (it cannot see the app connection's uncommitted rows). */
+  asPlatform<T>(fn: (tx: Tx) => Promise<T>): Promise<T>
   close(): Promise<void>
 }
 
@@ -118,6 +124,8 @@ export async function startWorld(): Promise<World> {
       throw new Error(`portal_test has no platform admin "${DIRECTOR}" (only postgres can set the flag): run db/test/rebuild_portal_test.sh.example`)
     }
 
+    const [linkable] = await asOrg('', (tx) => tx<Person[]>`SELECT id, username FROM app_users WHERE username = ${LINKABLE} AND is_active`)
+
     const run = randomUUID().slice(0, 8)
     const person = async (name: string, legacy: Role, org?: World['orgA'], active = true): Promise<Person> => {
       const username = `it_${name}_${run}`
@@ -135,6 +143,11 @@ export async function startWorld(): Promise<World> {
       orgA,
       orgB,
       director,
+      // Only the linking tests need it, so a database built before it existed still runs everything else.
+      get linkable(): Person {
+        if (!linkable) throw new Error(`portal_test has no login "${LINKABLE}": run db/test/rebuild_portal_test.sh.example`)
+        return linkable
+      },
       aAdmin: await person('a_admin', 'admin', orgA),
       aBuilder: await person('a_builder', 'builder', orgA),
       aViewer: await person('a_viewer', 'viewer', orgA),
@@ -147,6 +160,7 @@ export async function startWorld(): Promise<World> {
           await tx`INSERT INTO app_grants (org_id, user_id, node_id, access) VALUES (${orgId}, ${userId}, ${nodeId}, ${access})`
         }),
       asOrg,
+      asPlatform: (fn) => withPlatform(fn),
       close,
     }
   } catch (error) {

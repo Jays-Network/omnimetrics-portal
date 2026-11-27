@@ -60,6 +60,11 @@ as_postgres -d "$DB" -c "INSERT INTO app_users (username, email, hashed_password
   VALUES ('itest_director', 'itest_director@example.test', '!', 'viewer', true)
   ON CONFLICT (username) DO UPDATE SET is_platform_admin = true, is_active = true"
 
+echo "== a committed login without any membership (the director's 'link' tests need one both roles can see)"
+as_postgres -d "$DB" -c "INSERT INTO app_users (username, email, hashed_password, role)
+  VALUES ('itest_linkable', 'itest_linkable@example.test', '!', 'viewer')
+  ON CONFLICT (username) DO UPDATE SET is_active = true, is_platform_admin = false"
+
 cat <<'REMINDER'
 
 portal_test rebuilt. NOW set the passwords again (the roles were recreated without one):

@@ -107,17 +107,10 @@ async function loadUser(userId: string): Promise<User | null> {
   if (!row || !row.is_active || !(ROLES as readonly string[]).includes(row.role)) return null
   const role = row.role as Role
 
-  // allowed_projects is null ONLY for admin. Others get their app_user_projects
-  // rows, or [] (sees nothing) when there are none.
-  let allowedProjects: string[] | null = null
-  if (role !== 'admin') {
-    const projectRows = await sql<{ folder_name: string }[]>`
-      SELECT folder_name FROM app_user_projects
-      WHERE user_id = ${row.id}
-      ORDER BY folder_name
-    `
-    allowedProjects = projectRows.map((p) => p.folder_name)
-  }
+  // Only app_users is read (no RLS), so this works before and after migration 010. Tracking scope is per
+  // organisation (app_user_projects) and will be loaded on demand through withOrg in the tracking stage; until
+  // then non-admins carry [] (sees nothing). allowed_projects is null ONLY for the legacy global admin.
+  const allowedProjects: string[] | null = role === 'admin' ? null : []
   return { id: row.id, username: row.username, email: row.email, role, allowed_projects: allowedProjects }
 }
 

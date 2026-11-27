@@ -5,8 +5,8 @@ export const ROLES: readonly Role[] = ['admin', 'builder', 'viewer'] as const
 /**
  * The authenticated user as exposed to the client (GET /api/auth/me).
  * allowed_projects is null ONLY for role 'admin' (no folder_name filter).
- * For builder/viewer it is the list from app_user_projects; an empty array
- * means the user can see nothing.
+ * For builder/viewer it is currently always [] (sees nothing): tracking scope
+ * is per organisation and is loaded on demand from the tracking stage on.
  */
 export interface User {
   id: string

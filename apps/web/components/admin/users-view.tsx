@@ -101,7 +101,7 @@ function AddUser({ orgName, onClose, onAdd }: { orgName: string; onClose: () => 
   return (
     <Drawer title={`Add user to ${orgName}`} onClose={onClose} footer={<><button type="button" className={btnCls} onClick={onClose}>Cancel</button><button type="button" className={primaryCls} disabled={busy || !username || !email} onClick={() => void run(async () => setErr(await onAdd({ username, email, role })))}>Add user</button></>}>
       <MockBanner>Mock: nothing is stored or sent.</MockBanner>
-      <Field id="u-name" label="Username" hint="Lower-case letters, digits . _ -. An existing username becomes a member here too."><input id="u-name" className={inputCls} value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} maxLength={40} /></Field>
+      <Field id="u-name" label="Username" hint="Lower-case letters, digits . _ -. This creates a new login."><input id="u-name" className={inputCls} value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} maxLength={40} /></Field>
       <Field id="u-email" label="Email"><input id="u-email" type="email" className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} maxLength={120} /></Field>
       <Field id="u-role" label="Role in this organisation"><select id="u-role" className={inputCls} value={role} onChange={(e) => setRole(e.target.value as Role)}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select></Field>
       <Status msg={err ? { text: err, error: true } : null} />

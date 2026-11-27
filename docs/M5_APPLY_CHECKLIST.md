@@ -225,6 +225,11 @@ Then run the behavioural smoke test again against the real roles' semantics in p
 - Existing sessions: roles come from memberships after the cut-over; check that no user gained access (compare the pre-010 `allowed_projects` per user with the new one).
 - Do not enter any real integration credential until the isolation matrix is green; do not create client logins before TOTP (R7 hardening).
 
+- **Do not re-run 009 after the portal has created logins:** its backfill gives every `app_users` row a WorldRisk membership, including people added to another organisation only.
+- **The one-time password is not shown by any screen yet** (add user, reset). The API returns it once; the UI must display it before org admins use these screens.
+- Pg functions in this release (stage 2b): `organisations.list/create/update`; `users.list/add/link/update`; `account.changePassword/resetPassword`; `settings.get/set`; `writeAudit`. Still fail closed: `users.memberships`, `accounts.sessions/revoke`, `account.sessions/revoke`, `integrations.*`, tracking-scope editing.
+- `012_session_version` is written and **NOT applied** (review first; no app code uses it). Until then a password change or reset does NOT end existing sessions (a token stays valid until it expires). When approved: run as `jaysnet_admin`, after 010 (header has the commands and checks); roll back before 010.
+
 ## 4. Roll back (reverse order, each as its listed role; copy each `.down.sql.example` and run)
 
 ```bash
@@ -288,7 +293,11 @@ pnpm test                                                 # unit tests (no datab
 ```
 The passwords must match `.env.test`, and must be set again after every rebuild.
 
-The tests need one platform administrator, `itest_director`, which only postgres can create; the rebuild script does it. To add it to an existing `portal_test` without rebuilding:
+The tests need two committed fixtures, both created by the rebuild script: the platform administrator `itest_director` (only postgres can set the flag) and, since stage 2b, `itest_linkable`, a login with no membership. To add the second to an existing `portal_test` without rebuilding (no password reset needed):
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -c "INSERT INTO app_users (username,email,hashed_password,role) VALUES ('itest_linkable','itest_linkable@example.test','!','viewer') ON CONFLICT (username) DO UPDATE SET is_active=true, is_platform_admin=false"
+```
+And the first:
 ```bash
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -c "INSERT INTO app_users (username,email,hashed_password,role,is_platform_admin) VALUES ('itest_director','itest_director@example.test','!','viewer',true) ON CONFLICT (username) DO UPDATE SET is_platform_admin=true, is_active=true"
 ```

@@ -4,7 +4,7 @@ import type { PartialSettings } from '@/lib/settings/model'
 
 // MOCK admin data (M4): in memory on globalThis, keyed by organisation id. Nothing is stored or sent anywhere.
 // Obviously fake names. The credentials vault is private to this module's service and never read by a response builder.
-export interface MOrg { id: string; slug: string; name: string; status: 'active' | 'suspended'; dashboards: number }
+export interface MOrg { id: string; slug: string; name: string; status: 'active' | 'suspended' | 'archived'; dashboards: number }
 export interface MUser { id: string; username: string; email: string; isPlatform: boolean }
 export interface MMember { userId: string; orgId: string; role: Role; active: boolean; folders: string[] | null; grants: string }
 
@@ -17,6 +17,8 @@ export interface AdminDB {
   hosts: AllowedHost[]
   audit: AuditEntry[]
   sessions: SessionRow[]
+  /** Fake passwords the mock itself issued (and their replacements). Nothing here can sign in anywhere. */
+  passwords: Map<string, string>
   tests: Map<string, number[]> // rate limit: `${orgId}:${actor}` -> timestamps
   settings: { system: PartialSettings; org: Map<string, PartialSettings>; user: Map<string, PartialSettings> }
   seq: number
@@ -77,7 +79,7 @@ function seed(): AdminDB {
     { id: 's-maria-1', userId: 'u-maria', device: 'Chrome on macOS', ip: '10.0.3.x', startedAt: iso(500), lastSeenAt: iso(45), current: false },
     { id: 's-ana-1', userId: 'u-ana', device: 'Chrome on Android', ip: '10.0.4.x', startedAt: iso(900), lastSeenAt: iso(200), current: false },
   ]
-  return { orgs, users, members, integrations, vault, hosts, audit: [], sessions, tests: new Map(), settings: { system: {}, org: new Map(), user: new Map() }, seq: 100 }
+  return { orgs, users, members, integrations, vault, hosts, audit: [], sessions, passwords: new Map(), tests: new Map(), settings: { system: {}, org: new Map(), user: new Map() }, seq: 100 }
 }
 
 const g = globalThis as unknown as { __omniMockAdmin?: AdminDB }

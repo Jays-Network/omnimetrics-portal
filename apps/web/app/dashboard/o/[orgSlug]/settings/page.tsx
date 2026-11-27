@@ -6,7 +6,7 @@ import { requireOrgPage } from '@/lib/portal/org'
 export default async function SettingsPage({ params }: { params: Promise<{ orgSlug: string }> }) {
   const { orgSlug } = await params
   const { access, portal, user } = await requireOrgPage(orgSlug, 'settings.view')
-  const r = portal.settings.get(access, { id: user.id, username: user.username })
+  const r = await portal.settings.get(access, { id: user.id, username: user.username })
   if (!r.ok) notFound()
   return <SystemSettingsView orgSlug={access.org.slug} orgName={access.org.name} initial={r.view} />
 }
