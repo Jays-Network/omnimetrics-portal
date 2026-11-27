@@ -78,6 +78,20 @@ Panels: P1 Monthly, P2 Escorts, P3 Heatmap, P4 Active Tracks, P8 Grand Total, P9
 - **Effect on counts:** every range-driven panel (P1, P2, P9, P11, P12) at first load.
 - **Default until ruled:** Grafana's definition (`now-6h`, browser time), unless Jay names a range before Step 4.
 
+## D11. Generic datasets: base exclusions and "All"
+- **Status:** proposed (docs/PLAN_DATA.md Q2), not ruled
+- **Grafana behaviour:** no equivalent (every Grafana panel has its own SQL). Most Tracking Sheets panels also drop `workspace_name = 'WorldRisk Contractors'` (and NULL workspaces); some drop `%ZZZ Archive%` folders (PLAN_PHASE2 section 0).
+- **Proposed portal behaviour:** generic datasets exclude only `test sheets` (R1). "All" = every folder the user may see. Named Grafana-parity datasets keep each panel's own exclusions.
+- **Effect on counts:** generic row counts are higher than the matching Grafana panels. Not measured.
+- **Default until ruled:** no generic dataset runs on real data.
+
+## D12. Time ranges on date-only columns (generic datasets)
+- **Status:** proposed (docs/PLAN_DATA.md Q6), not ruled; related to D10
+- **Grafana behaviour:** `$__timeFilter` compares a date column with timestamps in the browser's time zone.
+- **Proposed portal behaviour:** none yet. Candidate: whole days in Africa/Johannesburg, both ends included.
+- **Effect on counts:** rows on the first and last day of a range can be counted differently. Not measured.
+- **Default until ruled:** Grafana's behaviour.
+
 ## M5 access rules (stage 2a, 2026-11-26; portal content only, no tracking number changes)
 Made while building the pg layer; Jay to confirm or overrule before the cut-over.
 - Builders and viewers are **default deny** (PLAN_BUILDER 3.1): they see only what a grant covers, plus the folder names leading to it. The mock showed them everything, so after the cut-over they see nothing until grants exist.

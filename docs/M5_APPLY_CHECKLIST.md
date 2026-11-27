@@ -4,12 +4,16 @@
 
 ## Cut-over order (do not reorder)
 
-1. **Fresh vzdump** (pre-flight 1), then section 0A steps 2 to 5 (database, 001, copy of the legacy tables).
-2. **003**, **003b**; **004** (external database).
-3. **005, 006, 007, 008**.
-4. **009, ONCE**, before any login is created by the portal.
-5. **010** (with the M5 app release, section 3), then **011**, then **012**.
-6. Only then set **`SESSION_VERSION=1`** (section 9) and restart the portal.
+The same order as section 0A (step numbers in brackets).
+
+1. **Fresh vzdump** (pre-flight 1), portal stopped (0A steps 1, 2).
+2. **Database** `omnimetrics_portal` and `portal_owner`, **001**, copy of the legacy tables (0A steps 3 to 5).
+3. **003**, **003b** (0A steps 6, 7).
+4. **005, 006, 007, 008**, then **009, ONCE**, before any login is created by the portal; then set the director (0A step 8).
+5. **010** (with the M5 app release, section 3), then **011**, then **012** (0A step 9).
+6. **004**, in the external database `jaysnet_data` (0A step 10). It is independent of every other file; it is placed here so there is one order to follow.
+7. App env, restart the portal, sign in (0A step 11).
+8. Only then set **`SESSION_VERSION=1`** (section 9) and restart the portal.
 
 **Never re-run 009 after the portal has created logins.** Its backfill gives every `app_users` row a WorldRisk membership, including people who were added to another organisation only.
 
@@ -30,7 +34,7 @@ Each is one transaction. Run with `-v ON_ERROR_STOP=1` (do NOT use `-1`; the fil
 | 011 `seed_managed_sources` | `postgres` (bypasses RLS; the file refuses anyone else) | global host `localhost:5432` + one managed `env:` integration per org (no credential) |
 | 012 `session_version` | `portal_owner` | `app_users.token_version` + column UPDATE grant for `portal_app` (ending sessions; used only with `SESSION_VERSION=1`) |
 
-Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012. Rollback is the exact reverse: 012 → 011 → 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
+Apply order: the "Cut-over order" above. Rollback: 012 → 011 → 010 → 009 → 008 → 007 → 006 → 005 → 003b (004's rollback is independent too).
 **Passwords are never in a file.** 003b and 004 create the roles with LOGIN and no password; Jay sets each one by hand with `\password` (section 1). A role without a password cannot log in (scram/md5).
 005 to 009 are safe for the CURRENT app (additive; legacy `app_users.role` and the old reads still work). 010 changes behaviour for it (see "010 cut-over").
 
@@ -175,8 +179,6 @@ Add the new database to whatever backs up PostgreSQL today; a dump of `jaysnet_d
 cd /opt/omnimetrics-portal
 # 003b (postgres). No edit needed (no password in the file). If the role exists already: 0A step 7.
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/003b_portal_platform_role.sql.example
-# 004 (postgres, in the EXTERNAL database: the only change to it). Copy, edit the timezone lines only if pre-flight 7 says so, then:
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.sql
 # 005 - 009 (portal_owner; the .example files hold no secrets and may be run directly)
 for f in 005_orgs_memberships 006_content 007_integrations_datasets 008_settings 009_audit_backfill; do
   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/$f.sql.example || break
@@ -187,6 +189,8 @@ psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform 
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/011_seed_managed_sources.sql.example
 # 012 (portal_owner), after 010. Then the checks in section 2, and only then SESSION_VERSION=1 (section 9):
 psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/012_session_version.sql.example
+# 004 (postgres, in the EXTERNAL database: the only change to it). Copy, edit the timezone lines only if pre-flight 7 says so, then:
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.sql
 ```
 **Set the three passwords by hand, right after 003b and 004** (as postgres, interactive; the password is not echoed, not logged, not in shell history):
 ```bash
