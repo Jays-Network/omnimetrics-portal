@@ -1,11 +1,13 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentOp } from '@omnimetrics/types'
 import * as account from '@/lib/portal/pg/account'
 import * as content from '@/lib/portal/pg/content'
 import * as dashboards from '@/lib/portal/pg/dashboards'
+import { driver } from '@/lib/integrations/test-connection'
+import * as integrations from '@/lib/portal/pg/integrations'
 import { NotFound } from '@/lib/portal/pg/errors'
 import * as org from '@/lib/portal/pg/org'
 import * as organisations from '@/lib/portal/pg/organisations'
@@ -13,12 +15,24 @@ import * as orgs from '@/lib/portal/pg/orgs'
 import * as settings from '@/lib/portal/pg/settings'
 import * as users from '@/lib/portal/pg/users'
 import { connect, startWorld, type Person, type World } from './harness'
+import { committedHost } from './hosts-fixture'
 
 // The core of stage 2a: with A's ctx, B's ids behave exactly like ids that do not exist.
 
+// For the integration functions. Set on process.env directly: other entries unstub all stubbed variables.
+process.env.INTEGRATION_KEYS = `itest:${randomBytes(32).toString('base64')}`
+
+// Not localhost (stored integrations may not point at this machine). Never resolves: no test here connects for real.
+const HOST = 'iso.itest.invalid'
+let removeIsoHost: (() => Promise<void>) | undefined
+beforeAll(async () => { removeIsoHost = await committedHost(HOST) })
+afterAll(async () => { await removeIsoHost?.() })
+
+const source = (name: string) => ({ name, kind: 'postgres' as const, host: HOST, port: 5432, database: 'portal_test', relations: [], sslMode: 'disable' as const, username: 'iso_user', credentials: 'iso-password' })
+
 let w: World
 /** Ids in organisation B (and one dashboard in A to aim cross-references from). */
-let b: { folder: string; dash: string; deletedBatch: string }
+let b: { folder: string; dash: string; deletedBatch: string; integration: string }
 let a: { folder: string; dash: string }
 let actors: org.OrgCtx[] // A admin, A builder, A viewer: each with the most access its role can hold
 
@@ -38,7 +52,9 @@ async function seed() {
   const gone = await make(bCtx, 'dashboard', bFolder, 'B deleted board')
   const del = await content.apply(bCtx, { op: 'delete', id: gone })
   if (!del.ok) throw new Error(del.error)
-  b = { folder: bFolder, dash: bDash, deletedBatch: del.batchId! }
+  const made = await integrations.save(bCtx, as(bCtx), source(`B secret source ${tag}`))
+  if (!made.ok) throw new Error(made.error)
+  b = { folder: bFolder, dash: bDash, deletedBatch: del.batchId!, integration: made.row.id }
   const set = await settings.set(bCtx, as(bCtx), 'org', { dateFormat: 'MDY' })
   if (!set.ok) throw new Error(set.error)
 
@@ -62,6 +78,9 @@ const snapshot = () =>
     settings: await tx`SELECT * FROM app_settings WHERE org_id = ${w.orgB.id} ORDER BY id`,
     audit: await tx`SELECT * FROM app_audit_log WHERE org_id = ${w.orgB.id} ORDER BY id`,
     org: await tx`SELECT * FROM app_orgs WHERE id = ${w.orgB.id}`,
+    integrations: await tx`
+      SELECT id, name, host, port, database, ssl_mode, relation_allowlist, credential_source, cred_key_id, has_credentials, status, rotated_at, updated_at
+        FROM app_integrations WHERE org_id = ${w.orgB.id} ORDER BY id`,
   }))
 
 /** A value or the message it threw, so "same answer" can be compared. */
@@ -214,6 +233,44 @@ const matrix: Record<string, () => Promise<void>> = {
       expect(await account.revokeSessions(as(actors[0]!))).toMatchObject({ ok: true })
       expect(await versions()).toEqual(before.map((v, i) => (i === 0 ? v + 1 : v)))
     }),
+  'integrations.list': async () => {
+    const admin = await integrations.list(actors[0]!)
+    expect(admin.ok).toBe(true)
+    noForeign(admin)
+    expect(JSON.stringify(admin)).not.toContain(b.integration)
+    for (const ctx of actors.slice(1)) expect(await integrations.list(ctx)).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'integrations.save': async () => {
+    await sameAsMissing((ctx, id) => integrations.save(ctx, as(ctx), { ...source('Taken over'), id }), b.integration)
+    for (const ctx of actors.slice(1)) expect(await integrations.save(ctx, as(ctx), source('Planted'))).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'integrations.remove': async () => sameAsMissing((ctx, id) => integrations.remove(ctx, as(ctx), id), b.integration),
+  'integrations.test': async () => {
+    const connect = vi.spyOn(driver, 'connect')
+    await sameAsMissing((ctx, id) => integrations.test(ctx, as(ctx), id), b.integration)
+    expect(connect).not.toHaveBeenCalled()
+    connect.mockRestore()
+  },
+  'integrations.audit': async () => {
+    const admin = await integrations.audit(actors[0]!)
+    expect(admin.ok).toBe(true)
+    noForeign(admin)
+    expect(JSON.stringify(admin)).not.toContain(b.integration)
+    for (const ctx of actors.slice(1)) expect(await integrations.audit(ctx)).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'integrations.listHosts': async () => {
+    noForeign(await integrations.listHosts(actors[0]!))
+    for (const ctx of actors.slice(1)) expect(await integrations.listHosts(ctx)).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'integrations.addHost': async () => {
+    const host = { host: 'planted.itest.invalid', portMin: 5432, portMax: 5432 }
+    expect(await integrations.addHost(actors[0]!, as(actors[0]!), host)).toMatchObject({ ok: false, code: 'forbidden' })
+    for (const ctx of actors.slice(1)) expect(await integrations.addHost(ctx, as(ctx), host)).toMatchObject({ ok: false, code: 'not_found' })
+  },
+  'integrations.removeHost': async () => {
+    expect(await integrations.removeHost(actors[0]!, as(actors[0]!), randomUUID())).toMatchObject({ ok: false, code: 'forbidden' })
+    for (const ctx of actors.slice(1)) expect(await integrations.removeHost(ctx, as(ctx), randomUUID())).toMatchObject({ ok: false, code: 'not_found' })
+  },
   'settings.get': async () => {
     for (const ctx of actors) {
       const r = await settings.get(ctx)
@@ -242,7 +299,7 @@ async function withSessionVersion<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-const modules = { account, content, dashboards, org, organisations, orgs, settings, users }
+const modules = { account, content, dashboards, integrations, org, organisations, orgs, settings, users }
 
 type Call = () => Promise<unknown>
 const SECRETS = /hashed_?password|\$2[aby]\$/i
@@ -258,7 +315,24 @@ describe('no repository function returns a password hash', () => {
     const added = await users.add(admin, me, { username: `scan.${tag}`, email: `scan.${tag}@example.test`, role: 'builder' })
     if (!added.ok) throw new Error(added.error)
     const member = added.member.userId
+    vi.spyOn(driver, 'connect').mockResolvedValue({})
+    const kept = await integrations.save(admin, me, source(`Scan kept ${tag}`))
+    const doomed = await integrations.save(admin, me, source(`Scan doomed ${tag}`))
+    if (!kept.ok || !doomed.ok) throw new Error('integration fixtures')
+    let hostId = ''
     return {
+      'integrations.list': () => integrations.list(admin),
+      'integrations.save': () => integrations.save(admin, me, source(`Scan new ${tag}`)),
+      'integrations.remove': () => integrations.remove(admin, me, doomed.row.id),
+      'integrations.test': () => integrations.test(admin, me, kept.row.id),
+      'integrations.audit': () => integrations.audit(admin),
+      'integrations.listHosts': () => integrations.listHosts(admin),
+      'integrations.addHost': async () => {
+        const r = await integrations.addHost(director, boss, { host: `scan-${tag}.itest.invalid`, portMin: 5432, portMax: 5432 })
+        if (r.ok) hostId = r.host.id
+        return r
+      },
+      'integrations.removeHost': () => integrations.removeHost(director, boss, hostId), // after addHost
       'content.tree': () => content.tree(admin),
       'content.apply': () => content.apply(admin, { op: 'create', kind: 'folder', parentId: null, name: `Scan ${tag}` }),
       'dashboards.get': () => dashboards.get(admin, a.dash),

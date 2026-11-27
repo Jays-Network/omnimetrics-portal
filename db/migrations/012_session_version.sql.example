@@ -3,8 +3,8 @@
 -- app release puts it in the JWT and compares it on load. NO APP CODE USES IT YET: do not apply before
 -- Jay has reviewed it.
 --
--- RUN AS:  jaysnet_admin (owner of app_users).   After 010 (011 is independent).
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.sql.example
+-- RUN AS:  portal_owner (owner of app_users), in omnimetrics_portal.   After 010 (011 is independent).
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/012_session_version.sql.example
 --   Optional: -v app_role=<role>        (default portal_app; the test database uses portal_test_app)
 --             -v platform_role=<role>   (default portal_platform; portal_test_platform)
 -- Rollback: 012_session_version.down.sql.example

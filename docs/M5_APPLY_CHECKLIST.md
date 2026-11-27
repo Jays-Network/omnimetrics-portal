@@ -1,9 +1,11 @@
 # M5 Apply Checklist (migrations 003b and 004 to 012)
 
+**Where things run (ruling 2026-11-27):** the portal's tables live in `omnimetrics_portal` (owner `portal_owner`); `jaysnet_data` is an external source and receives only 004. **Follow section 0A**; sections 1 to 4 are the reference for each file. Earlier versions of this checklist, which applied everything to `jaysnet_data` as `jaysnet_admin`, are superseded.
+
 ## Cut-over order (do not reorder)
 
-1. **Fresh vzdump** (pre-flight 1).
-2. **003b**, then **004**.
+1. **Fresh vzdump** (pre-flight 1), then section 0A steps 2 to 5 (database, 001, copy of the legacy tables).
+2. **003**, **003b**; **004** (external database).
 3. **005, 006, 007, 008**.
 4. **009, ONCE**, before any login is created by the portal.
 5. **010** (with the M5 app release, section 3), then **011**, then **012**.
@@ -11,22 +13,22 @@
 
 **Never re-run 009 after the portal has created logins.** Its backfill gives every `app_users` row a WorldRisk membership, including people who were added to another organisation only.
 
-Applied BY JAY, by hand. Claude writes the SQL and never runs it against `jaysnet_data`.
+Applied BY JAY, by hand. Claude writes the SQL and never runs it against `jaysnet_data` or `omnimetrics_portal`.
 Files live in `db/migrations/` as `NNN_name.sql.example` with a matching `NNN_name.down.sql.example`.
 Each is one transaction. Run with `-v ON_ERROR_STOP=1` (do NOT use `-1`; the files carry their own BEGIN/COMMIT), so a failure stops and rolls back that file.
 
 | File | Run as | Purpose |
 |---|---|---|
 | 003b `portal_platform_role` | `postgres` | `portal_platform` (LOGIN, no password in the file, no table grants yet) |
-| 004 `portal_reader_roles` | `postgres` | `portal_reader_wr`, `portal_reader_adars` (SELECT on one tracking table each; LOGIN, no password in the file) |
-| 005 `orgs_memberships` | `jaysnet_admin` | `app_orgs`, `app_memberships`, `is_platform_admin`, `org_id` on `app_user_projects` |
-| 006 `content` | `jaysnet_admin` | content tree, versions, grants |
-| 007 `integrations_datasets` | `jaysnet_admin` | allowed hosts, integrations, datasets, fields |
-| 008 `settings` | `jaysnet_admin` | `app_settings` |
-| 009 `audit_backfill` | `jaysnet_admin` | audit columns, WorldRisk backfill |
-| 010 `rls_grants` | `jaysnet_admin` | RLS + grants to `portal_app` and `portal_platform`, credential function (apply WITH the M5 app release) |
+| 004 `portal_reader_roles` | `postgres`, **in `jaysnet_data`** | `portal_reader_wr`, `portal_reader_adars` (SELECT on one tracking table each; LOGIN, no password in the file) |
+| 005 `orgs_memberships` | `portal_owner` | `app_orgs`, `app_memberships`, `is_platform_admin`, `org_id` on `app_user_projects` |
+| 006 `content` | `portal_owner` | content tree, versions, grants |
+| 007 `integrations_datasets` | `portal_owner` | allowed hosts, integrations, datasets, fields |
+| 008 `settings` | `portal_owner` | `app_settings` |
+| 009 `audit_backfill` | `portal_owner` | audit columns, WorldRisk backfill |
+| 010 `rls_grants` | `portal_owner` | RLS + grants to `portal_app` and `portal_platform`, credential function (apply WITH the M5 app release) |
 | 011 `seed_managed_sources` | `postgres` (bypasses RLS; the file refuses anyone else) | global host `localhost:5432` + one managed `env:` integration per org (no credential) |
-| 012 `session_version` | `jaysnet_admin` | `app_users.token_version` + column UPDATE grant for `portal_app` (ending sessions; used only with `SESSION_VERSION=1`) |
+| 012 `session_version` | `portal_owner` | `app_users.token_version` + column UPDATE grant for `portal_app` (ending sessions; used only with `SESSION_VERSION=1`) |
 
 Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012. Rollback is the exact reverse: 012 → 011 → 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
 **Passwords are never in a file.** 003b and 004 create the roles with LOGIN and no password; Jay sets each one by hand with `\password` (section 1). A role without a password cannot log in (scram/md5).
@@ -36,17 +38,17 @@ Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 
 
 1. **Fresh vzdump** of the LXC, taken now, verified restorable (or at least listed in the backup storage). Note the vmid/timestamp: ______
 2. **Stop point**: no one else is logged in; Grafana (:3000) and the sync scripts in `/opt/jaysnet` untouched. The portal on :3002 may stay up for 004 to 009; stop it for 010 until the M5 release is deployed.
-3. **Who runs what**: `sudo -u postgres psql` works; `psql -U jaysnet_admin -d jaysnet_data -h localhost` works.
-4. **Confirm roles and owners** (as postgres):
+3. **Who runs what**: `sudo -u postgres psql` works; after 0A step 3, `psql -U portal_owner -d omnimetrics_portal -h localhost` works.
+4. **Confirm roles** (as postgres, in `jaysnet_data`):
    ```sql
    SELECT rolname, rolsuper, rolcreaterole, rolbypassrls, rolcanlogin FROM pg_roles
      WHERE rolname IN ('jaysnet_admin','portal_app','portal_platform','grafana_reader','portal_reader','portal_reader_wr','portal_reader_adars');
-   -- expect: portal_app NOT super/bypassrls; portal_platform and portal_reader_* absent; jaysnet_admin NOT superuser (it may be; note it)
+   -- expect: portal_app NOT super/bypassrls; note which portal_platform / portal_reader_* exist (0A steps 6, 7, 10)
    SELECT tablename, tableowner FROM pg_tables WHERE tablename LIKE 'app\_%' ESCAPE '\';
-   -- expect: app_users, app_user_projects, app_audit_log all owned by jaysnet_admin
+   -- expect: app_users, app_user_projects, app_audit_log (the legacy copies that 0A reads)
    SELECT has_table_privilege('portal_app','worldrisk_tracking','SELECT'), has_table_privilege('portal_app','adars_tracking','SELECT'); -- f, f
    ```
-5. **Backups that dump the database**: if any cron or script runs `pg_dump` on `jaysnet_data` as `jaysnet_admin`, it will FAIL on the tenant tables after 010 (row_security is off during pg_dump and the owner is forced). Look (read-only; do not edit /etc/cron.d from here): `crontab -l`, `sudo crontab -l`, `ls /etc/cron.d`. Switch such a job to `postgres` before 010. vzdump is unaffected.
+5. **Backups that dump databases**: see the end of section 0A. Look (read-only; do not edit /etc/cron.d from here): `crontab -l`, `sudo crontab -l`, `ls /etc/cron.d`.
 6. **pg_hba.conf** (as postgres; the new roles have NO password until you set one, so a `trust` line would let them in without one):
    ```sql
    SELECT line_number, type, database, user_name, address, auth_method FROM pg_hba_file_rules ORDER BY line_number;
@@ -55,38 +57,140 @@ Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 
    ```
 7. **Time-zone decision for 004** (R6 relevant): run the two queries in the 004 header (Grafana's effective timezone; stored zone of `row_modified_at`). Edit the two `ALTER ROLE ... SET timezone` lines if the answer is not `Africa/Johannesburg`. Record the outcome in `docs/DECISIONS.md` if any number can change.
 8. **Passwords** for the three new roles (`portal_reader_wr`, `portal_reader_adars`, `portal_platform`) generated with `openssl rand -base64 32` and kept in your password manager. They go only into `\password` (section 1) and then into `.env` (`DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `DATABASE_URL_PLATFORM`). Nothing is typed into a file or onto a command line. The real `003_*.sql` / `004_*.sql` copies stay git-ignored (`.gitignore` lines kept).
-9. **Env list for the M5 release** (`.env`, outside git): `DATABASE_URL` (portal_app), `DATABASE_URL_PLATFORM` (portal_platform, used ONLY by `withPlatform()`; never given to any other code path), `DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `INTEGRATION_KEYS`. The only `env:` credential sources the schema accepts are `env:DATABASE_URL_READONLY_<NAME>`.
+9. **Env list for the M5 release** (`.env`, outside git): `DATABASE_URL` (portal_app, `omnimetrics_portal`), `DATABASE_URL_PLATFORM` (portal_platform, `omnimetrics_portal`; used ONLY by `withPlatform()`, never given to any other code path), `DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS` (`jaysnet_data`), `INTEGRATION_KEYS`. The only `env:` credential sources the schema accepts are `env:DATABASE_URL_READONLY_<NAME>`.
 10. **Test database green first**: `db/test/setup_test_db.sql.example` applied, 001 and 005 to 012 applied there (`sudo bash db/test/rebuild_portal_test.sh.example` does all of it, section 8), and `db/test/smoke_m5.sql.example` run once as `portal_test_app` and once as `portal_test_platform` with `0 FAILED, 0 skipped` (section 6). Do not start section 1 before this.
-11. **Row snapshot** (baseline for later comparison):
-   ```sql
-   SELECT (SELECT count(*) FROM app_users) users, (SELECT count(*) FROM app_user_projects) projects, (SELECT count(*) FROM app_audit_log) audits,
-          (SELECT count(*) FROM worldrisk_tracking) wr_rows, (SELECT count(*) FROM adars_tracking) adars_rows;
-   ```
-   Users/projects: ______ / ______ (these are the expected membership and project-row counts after 009).
-12. **Note `INTEGRATION_KEYS`** is NOT needed for these files (no credential is stored). It is needed only when the app is released.
+11. **Row snapshot**: 0A step 5 compares the portal rows. The users/projects counts there are the expected membership and project-row counts after 009: ______ / ______.
+12. **Note `INTEGRATION_KEYS`** is NOT needed for these files (no credential is stored). It is needed when the app is released with `PORTAL_DATA=pg`: generate and back it up first (section 10).
+
+## 0A. Move the portal's own tables out of jaysnet_data
+
+Ruling (2026-11-27, DECISIONS "Portal database"): `jaysnet_data` is an EXTERNAL data source, like any client's database. The portal's `app_*` tables live in their own database, `omnimetrics_portal`, owned by `portal_owner`. All by Jay, by hand, in this order. `jaysnet_admin` owns nothing in the new database (the untouched legacy copies in `jaysnet_data` stay its until they are dropped).
+
+Run from `/opt/omnimetrics-portal`. Stop at the first error.
+
+**1. Fresh vzdump** of the LXC (on the Proxmox host). Note vmid/timestamp: ______
+
+**2. Stop the portal** on :3002 (no new logins or audit rows during the copy), then look:
+```bash
+# the legacy tables must still have the 001 shape: 3 tables, no org_id / is_platform_admin / token_version
+sudo -u postgres psql -d jaysnet_data -c "SELECT table_name, column_name FROM information_schema.columns WHERE table_name LIKE 'app\_%' ORDER BY 1, ordinal_position"
+# which roles already exist (they are cluster-wide, not per database)
+sudo -u postgres psql -tAc "SELECT rolname FROM pg_roles WHERE rolname IN ('portal_owner','portal_app','portal_platform','portal_reader_wr','portal_reader_adars') ORDER BY 1"
+```
+If there are more `app_*` tables or columns than 001 makes, STOP: some M5 file was applied to `jaysnet_data` and this procedure does not cover that.
+
+**3. Role and database** (`sudo -u postgres psql`):
+```sql
+CREATE ROLE portal_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+\password portal_owner
+CREATE DATABASE omnimetrics_portal OWNER portal_owner;
+REVOKE ALL ON DATABASE omnimetrics_portal FROM PUBLIC;   -- or every login on the cluster (Grafana's too) may connect
+```
+Check `pg_hba.conf` lets `portal_owner`, `portal_app` and `portal_platform` reach `omnimetrics_portal` with a password (no `trust`).
+
+**4. 001** in the new database:
+```bash
+psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/001_app_tables.sql
+```
+
+**5. Copy the three legacy tables** (as postgres; `jaysnet_data` is only read):
+```bash
+set -o pipefail
+sudo -u postgres pg_dump --data-only -t app_users -t app_user_projects -t app_audit_log jaysnet_data \
+  | sudo -u postgres psql -X -v ON_ERROR_STOP=1 --single-transaction -d omnimetrics_portal
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -c "SELECT setval('app_audit_log_id_seq', COALESCE((SELECT max(id) FROM app_audit_log), 1), (SELECT count(*) > 0 FROM app_audit_log))"
+# row counts: the two outputs must be identical
+for db in jaysnet_data omnimetrics_portal; do
+  echo "== $db"; sudo -u postgres psql -tA -d "$db" -c "SELECT (SELECT count(*) FROM app_users) users, (SELECT count(*) FROM app_user_projects) projects, (SELECT count(*) FROM app_audit_log) audits"
+done
+```
+
+**6. 003.** If `portal_app` did NOT exist in step 2, copy, set the password and run the file as its header says. It normally exists (the portal already uses it), and then `CREATE ROLE` would fail, so run only its other statements:
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal <<'SQL'
+BEGIN;
+ALTER ROLE portal_app SET statement_timeout = '10s';
+GRANT CONNECT ON DATABASE omnimetrics_portal TO portal_app;
+GRANT USAGE ON SCHEMA public TO portal_app;
+GRANT SELECT, INSERT, UPDATE ON app_users TO portal_app;
+GRANT SELECT, INSERT, DELETE ON app_user_projects TO portal_app;
+GRANT SELECT, INSERT ON app_audit_log TO portal_app;
+GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq TO portal_app;
+COMMIT;
+SQL
+```
+
+**7. 003b.** If `portal_platform` did not exist:
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/003b_portal_platform_role.sql.example
+sudo -u postgres psql -d omnimetrics_portal     # then: \password portal_platform
+```
+If it already existed:
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal <<'SQL'
+BEGIN;
+ALTER ROLE portal_platform SET statement_timeout = '10s';
+GRANT CONNECT ON DATABASE omnimetrics_portal TO portal_platform;
+GRANT USAGE ON SCHEMA public TO portal_platform;
+COMMIT;
+SQL
+```
+
+**8. 005 to 009, then the director.** 009 ONCE, before the portal creates any login:
+```bash
+for f in 005_orgs_memberships 006_content 007_integrations_datasets 008_settings 009_audit_backfill; do
+  psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/$f.sql.example || break
+done
+psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -c "UPDATE app_users SET is_platform_admin = true WHERE username = 'Jay'"
+```
+
+**9. 010, 011, 012:**
+```bash
+psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/010_rls_grants.sql.example
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/011_seed_managed_sources.sql.example
+psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/012_session_version.sql.example
+```
+Then the checks of section 2 against `omnimetrics_portal`.
+
+**10. 004, if the reader roles did not exist: the ONLY change to the external database.** It runs in `jaysnet_data` (section 1, with its timezone decision and `\password`).
+
+**11. App env** (outside git), then restart the portal:
+- `DATABASE_URL` -> `portal_app` on `omnimetrics_portal`
+- `DATABASE_URL_PLATFORM` -> `portal_platform` on `omnimetrics_portal`
+- `DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS` -> **unchanged target: `jaysnet_data`** (reader roles of 004)
+
+Sign in as before (same logins, same passwords). `SESSION_VERSION=1` only after this (section 9).
+
+**Rollback:** point `DATABASE_URL` back at `jaysnet_data` and restart. The old tables there are NOT touched or dropped by any step above. Anything written to `omnimetrics_portal` since the switch (new logins, password changes, audit rows) is not in them. Dropping the old tables in `jaysnet_data` is a separate, later, explicit step; nothing here does it.
+
+**Backups:** a `pg_dump` of the portal database must run as `postgres` (FORCE row-level security makes it fail as `portal_owner`):
+```bash
+sudo -u postgres pg_dump -Fc -d omnimetrics_portal -f <backup path>
+```
+Add the new database to whatever backs up PostgreSQL today; a dump of `jaysnet_data` no longer includes the portal's tables. vzdump covers both.
 
 ## 1. Apply
 
 ```bash
 cd /opt/omnimetrics-portal
-# 003b (postgres). No edit needed (no password in the file):
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/003b_portal_platform_role.sql.example
-# 004 (postgres). Copy, edit the timezone lines only if pre-flight 7 says so, then:
+# 003b (postgres). No edit needed (no password in the file). If the role exists already: 0A step 7.
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/003b_portal_platform_role.sql.example
+# 004 (postgres, in the EXTERNAL database: the only change to it). Copy, edit the timezone lines only if pre-flight 7 says so, then:
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.sql
-# 005 - 009 (jaysnet_admin; the .example files hold no secrets and may be run directly)
+# 005 - 009 (portal_owner; the .example files hold no secrets and may be run directly)
 for f in 005_orgs_memberships 006_content 007_integrations_datasets 008_settings 009_audit_backfill; do
-  psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/$f.sql.example || break
+  psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/$f.sql.example || break
 done
 # 010 only together with the M5 app release (see section 3)
-psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.sql.example
+psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/010_rls_grants.sql.example
 # 011 (postgres, bypasses RLS; no secret in the file). After 010, once the M5 release is deployed or just before it:
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.sql.example
-# 012 (jaysnet_admin), after 010. Then the checks in section 2, and only then SESSION_VERSION=1 (section 9):
-psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.sql.example
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/011_seed_managed_sources.sql.example
+# 012 (portal_owner), after 010. Then the checks in section 2, and only then SESSION_VERSION=1 (section 9):
+psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/012_session_version.sql.example
 ```
 **Set the three passwords by hand, right after 003b and 004** (as postgres, interactive; the password is not echoed, not logged, not in shell history):
 ```bash
-sudo -u postgres psql -d jaysnet_data
+sudo -u postgres psql
 #   \password portal_platform
 #   \password portal_reader_wr
 #   \password portal_reader_adars
@@ -94,13 +198,13 @@ sudo -u postgres psql -d jaysnet_data
 (`portal_app` already has its password from 003.) Until a password is set the role cannot log in; set them before the connection tests below.
 Run the files one at a time and do the verification below after EACH; stop at the first red result and roll back that file (its own transaction already did, if it failed).
 
-Set the director (manual, once, after 005; as `jaysnet_admin` or `postgres`; replace the username if it differs):
+Set the director (manual, once, after 005; as `portal_owner` or `postgres`; replace the username if it differs):
 ```sql
 UPDATE app_users SET is_platform_admin = true WHERE username = 'Jay';
 ```
 After 010 `portal_app` cannot write that column, so this is the only way.
 
-## 2. Verification after each file (psql as jaysnet_admin unless noted)
+## 2. Verification after each file (psql as portal_owner in omnimetrics_portal unless noted)
 
 **After 003b (as postgres).** Run the three checks in its header: attributes `t f f f f f f` (login yes; super, createdb, createrole, bypassrls, inherit, replication no); `statement_timeout=10s`; `has_table_privilege('portal_platform','app_users','SELECT')` false. Then `\password portal_platform`.
 
@@ -162,7 +266,7 @@ SELECT count(*) FROM app_audit_log WHERE org_id IS NOT NULL;                    
 ```
 Run 009 **once**. Do not re-run it as a check, and never after the portal has created logins (see "Cut-over order").
 
-**After 010.**
+**After 010.** (The checks that name `worldrisk_tracking` or `adars_tracking` error here: those tables are not in this database, which is the point.)
 ```sql
 -- 1. table list and RLS: enabled + forced on all app_* except app_users, app_orgs
 SELECT relname, relrowsecurity AS rls, relforcerowsecurity AS forced FROM pg_class
@@ -210,7 +314,7 @@ SELECT c.relname, string_agg(p.priv, ',' ORDER BY p.priv) AS privs
 SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolinherit FROM pg_roles WHERE rolname='portal_platform';   -- f f f f
 SELECT has_function_privilege('portal_platform','app_integration_credentials(uuid)','EXECUTE');   -- false
 SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relowner=(SELECT oid FROM pg_roles WHERE rolname='portal_platform'); -- 0
-SELECT proname, prosecdef, pg_get_userbyid(proowner) AS owner, proconfig FROM pg_proc WHERE proname='app_integration_credentials';  -- t, jaysnet_admin, {search_path=pg_catalog, public}
+SELECT proname, prosecdef, pg_get_userbyid(proowner) AS owner, proconfig FROM pg_proc WHERE proname='app_integration_credentials';  -- t, portal_owner, {search_path=pg_catalog, public}
 -- 6. the readers cannot read app tables, and portal_app cannot bypass RLS
 SELECT has_table_privilege('portal_reader_wr','app_users','SELECT') OR has_table_privilege('portal_reader_adars','app_content_nodes','SELECT');  -- false
 SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('portal_app','portal_platform');   -- f, f (twice)
@@ -243,21 +347,23 @@ Then run the behavioural smoke test again against the real roles' semantics in p
 
 - **Never re-run 009 after the portal has created logins:** its backfill gives every `app_users` row a WorldRisk membership, including people added to another organisation only.
 - The one-time password (add user, reset) is shown once in a panel on the Users and Accounts screens (stage 2c).
-- Pg functions in this release (stage 2b): `organisations.list/create/update`; `users.list/add/link/update`; `account.changePassword/resetPassword`; `settings.get/set`; `writeAudit`. Stage 2c adds `account.revokeSessions` (needs `SESSION_VERSION=1`). Still fail closed: `users.memberships`, `accounts.sessions/revoke`, `account.sessions/revoke` (the session list and revoking one session have no schema), `integrations.*`, tracking-scope editing.
-- Until 012 is applied AND `SESSION_VERSION=1`, a password change or reset does NOT end existing sessions (a token stays valid until it expires). 012: run as `jaysnet_admin`, after 010; roll back before 010.
+- Pg functions in this release (stage 2b): `organisations.list/create/update`; `users.list/add/link/update`; `account.changePassword/resetPassword`; `settings.get/set`; `writeAudit`. Stage 2c adds `account.revokeSessions` (needs `SESSION_VERSION=1`); stage 3 adds `integrations.*` and the allowed hosts (needs `INTEGRATION_KEYS`, section 10). Still fail closed: `users.memberships`, `accounts.sessions/revoke`, `account.sessions/revoke` (the session list and revoking one session have no schema), tracking-scope editing.
+- Until 012 is applied AND `SESSION_VERSION=1`, a password change or reset does NOT end existing sessions (a token stays valid until it expires). 012: run as `portal_owner`, after 010; roll back before 010.
 
 ## 4. Roll back (reverse order, each as its listed role; copy each `.down.sql.example` and run)
 
+This undoes single migrations inside `omnimetrics_portal`. To go back to the old database altogether, use the rollback in section 0A.
+
 **012 first, and only after `SESSION_VERSION` is unset and the portal restarted** (with the flag on and no column, every signed-in request answers 503):
 ```bash
-psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.down.sql.example
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.down.sql.example   # next; deletes the 2 managed integrations (+ datasets on them) and the global localhost host
-psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.down.sql.example
+psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/012_session_version.down.sql.example
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/011_seed_managed_sources.down.sql.example   # next; deletes the 2 managed integrations (+ datasets on them) and the global localhost host
+psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/010_rls_grants.down.sql.example
 for f in 009_audit_backfill 008_settings 007_integrations_datasets 006_content 005_orgs_memberships; do
-  psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/$f.down.sql.example || break
+  psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/$f.down.sql.example || break
 done
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/004_portal_reader_roles.down.sql.example   # stop anything using the reader roles first
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/003b_portal_platform_role.down.sql.example  # after 010's rollback
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/003b_portal_platform_role.down.sql.example  # after 010's rollback
 ```
 Verify: `\dt app_*` lists only `app_users`, `app_user_projects`, `app_audit_log`; `SELECT count(*) FROM pg_policies WHERE schemaname='public'` is 0; row counts equal the baseline; `portal_app` privileges equal the 003 set; `portal_platform` absent. Down files DROP data created after go-live (content, versions, integrations, settings, memberships): after real use the safe rollback is restoring the vzdump.
 
@@ -291,9 +397,12 @@ done
 ```
 011 (applied by the rebuild script) is the only way to create an `env:` row, and tests 535 to 538 (UPDATE and DELETE of an env: row touch 0 rows; other org cannot touch it) use it. Without it they print `SKIP`.
 New in this version, all as `portal_test_app`: 250 to 252 (INSERT, UPDATE, DELETE on `app_allowed_hosts` refused by privilege), 535 to 538 (env: row), 131 (no org-owned host rows without context; the global `localhost` row is readable by design); 412 now uses `RETURNING id` (a constant RETURNING does not trigger the SELECT policy).
-Tests 540 to 547 and 771 are the 012 checks (column, default, grants, a bump). Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skipped` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED, 0 skipped`; no line starting `FAIL` or `SKIP`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to `jaysnet_data`, send the output back.
+Tests 540 to 547 and 771 are the 012 checks (column, default, grants, a bump). Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skipped` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED, 0 skipped`; no line starting `FAIL` or `SKIP`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to the real databases, send the output back.
 
 ## 7. Open points (decide before the M5 release)
+
+- The Organisations screen shows 0 integrations in pg: counting them needs a grant decision (DECISIONS P8).
+- A stored integration cannot point at this server or the portal database's server (DECISIONS P3). Only the app enforces it.
 
 - `env:` integrations are created only by 011 (as `postgres`). `portal_platform` has no grant on `app_integrations` and the owner is not the platform role, so the app can neither create nor change them; adding a third managed source later means another seed file as `postgres` (or a deliberate platform grant). The app must render managed rows read-only.
 - `portal_app` is now `SELECT` only on `app_allowed_hosts`; adding a host needs the platform path (`portal_platform`, which keeps full DML there).
@@ -330,3 +439,27 @@ Test data is rolled back (neither test role could delete it). The one committed 
 - On: a password change, reset or "sign out everywhere" (`POST /api/portal/account` `{"op":"revoke_all"}`) ends that person's other sessions. Change and revoke keep the current session (same expiry).
 - It takes effect through the pg data layer (`PORTAL_DATA=pg`). With the mock portal nothing bumps the version.
 - Turning it off again makes ended tokens valid until they expire. To end every session then, change `JWT_SECRET`.
+
+## 10. Integration credential keys (`INTEGRATION_KEYS`)
+
+Stored integration credentials are encrypted with AES-256-GCM. The key is NOT in the database.
+
+**LOSS OF THE KEY MEANS STORED CREDENTIALS CANNOT BE RECOVERED.** Every stored integration would have to be entered again.
+
+1. Generate: `openssl rand -base64 32`
+2. Put it in the portal's env file outside git: `INTEGRATION_KEYS=k1:<base64>`. The id (`k1`) is 1 to 32 characters of `a-z 0-9 _ -`; the key is exactly the 44-character output above.
+3. **Keep a copy in the password manager** before entering any credential. A vzdump holds the env file next to the encrypted rows: protect backups accordingly.
+4. Restart the portal. A missing or malformed value disables every integration function and logs one line naming `INTEGRATION_KEYS` (never the value).
+
+**Rotation** (the first entry encrypts, every entry decrypts):
+1. Generate a new key and add it **FIRST**: `INTEGRATION_KEYS=k2:<new>,k1:<old>`. Keep both in the password manager. Restart.
+2. Re-enter each stored credential on the Integrations screen (Edit, Replace credentials, database user and password). There is no re-encryption script yet.
+3. See what still uses the old key (as `postgres`):
+   `SELECT o.slug, i.name, i.cred_key_id FROM app_integrations i JOIN app_orgs o ON o.id = i.org_id WHERE i.cred_key_id IS NOT NULL ORDER BY 3, 1, 2;`
+4. Only when no row shows `k1`, remove the old key **last**: `INTEGRATION_KEYS=k2:<new>`. Restart.
+
+**Managed rows** (011) store nothing: testing one reads `DATABASE_URL_READONLY_WR` / `_ADARS` (user and password only; host, port, database and TLS come from the row).
+
+**What the database does not enforce:** nothing in 007 or 010 ties `app_integrations.host` to `app_allowed_hosts`. Only the app checks it, on every save and again on every test.
+
+Verification certificates come from Node's root store. For `verify-ca` / `verify-full` against a private CA, set `NODE_EXTRA_CA_CERTS`.

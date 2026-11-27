@@ -6,11 +6,13 @@ import type { Role } from '@omnimetrics/types'
 import type { MemberRow, Membership } from '@/lib/admin/types'
 import { GlassPanel } from '@/components/fx/glass-panel'
 import { OneTimePassword, type IssuedPassword } from './one-time-password'
+import { usePortalMode } from './portal-mode'
 import { DataTable, Drawer, Field, MockBanner, PageFrame, Pill, Status, api, btnCls, inputCls, primaryCls, useBusy } from './ui'
 
 const ROLES: Role[] = ['admin', 'builder', 'viewer']
 
 export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; orgName: string; isDirector: boolean }) {
+  const mode = usePortalMode()
   const base = `/api/portal/o/${encodeURIComponent(orgSlug)}/admin/users`
   const [members, setMembers] = useState<MemberRow[]>([])
   const [folders, setFolders] = useState<string[]>([])
@@ -86,7 +88,7 @@ export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; o
           <button type="button" className={btnCls} onClick={() => setScope(null)}>Cancel</button>
           <button type="button" className={primaryCls} disabled={busy} onClick={() => void patch(scope.userId, { trackingFolders: picked }, `Scope saved for ${scope.username}.`)}>Save scope</button>
         </>}>
-          <p className="text-xs text-brand-text-muted">Which tracking folders {scope.username} may see in {orgName}. Builders and viewers only ever get these. Mock folder names.</p>
+          <p className="text-xs text-brand-text-muted">Which tracking folders {scope.username} may see in {orgName}. Builders and viewers only ever get these.{mode === 'mock' ? ' Mock folder names.' : ''}</p>
           <fieldset className="space-y-1.5"><legend className="sr-only">Tracking folders</legend>
             {folders.map((f) => (
               <label key={f} className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-[var(--color-brand-accent)]" checked={picked.includes(f)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, f] : p.filter((x) => x !== f)))} /> {f}</label>
@@ -94,7 +96,7 @@ export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; o
           </fieldset>
         </Drawer>
       ) : null}
-      {adding ? <AddUser orgName={orgName} onClose={() => setAdding(false)} onAdd={async (b) => { const r = await api<{ oneTimePassword: string }>(base, 'POST', { op: 'add', ...b }); if (r.ok) { setAdding(false); setIssued({ username: b.username, password: r.data.oneTimePassword, trigger: addButton.current }); setMsg({ text: `Added ${b.username} (mock).` }); await load(); return null } return r.error }} /> : null}
+      {adding ? <AddUser orgName={orgName} onClose={() => setAdding(false)} onAdd={async (b) => { const r = await api<{ oneTimePassword: string }>(base, 'POST', { op: 'add', ...b }); if (r.ok) { setAdding(false); setIssued({ username: b.username, password: r.data.oneTimePassword, trigger: addButton.current }); setMsg({ text: `Added ${b.username}.` }); await load(); return null } return r.error }} /> : null}
       {issued ? <OneTimePassword issued={issued} onClose={dismissIssued} /> : null}
     </PageFrame>
   )

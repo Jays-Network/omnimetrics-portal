@@ -45,7 +45,7 @@ export interface Portal {
     apply(ctx: OrgAccess, op: ContentOp): Promise<ContentResult>
   }
   /** M4 admin surface. Typed from the mock module; callers always `await`. */
-  integrations: typeof A.integrations
+  integrations: Service<typeof A.integrations>
   organisations: Service<typeof A.organisations>
   users: Service<typeof A.users>
   accounts: Service<typeof A.accounts>

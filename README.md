@@ -7,19 +7,31 @@ Port 3001 is OmniOrchestrator and stays separate; the portal uses 3002.
 
 See `CLAUDE.md` and `docs/OmniMetrics_Portal_Architecture.md`.
 
+## Databases
+
+The portal has its own database, `omnimetrics_portal` (all `app_*` tables). `jaysnet_data` is an external data
+source, reached only through integrations and only read; the single change made there is migration 004 (two
+read-only roles). An installation that still keeps the `app_*` tables in `jaysnet_data` moves them with
+`docs/M5_APPLY_CHECKLIST.md` section 0A.
+
 ## Phase 1: setup by hand
 
 Run from the repo root as user `omni` (Node 22, pnpm 12).
 
-1. **Create the app tables** (as `jaysnet_admin`):
+For a new installation, first create the portal's role and database (`sudo -u postgres psql`):
+`CREATE ROLE portal_owner LOGIN;` `\password portal_owner` `CREATE DATABASE omnimetrics_portal OWNER portal_owner;`
+(The earlier Phase 1 steps, which used `jaysnet_data` as `jaysnet_admin`, are superseded.) Steps 1 to 4 give the
+Phase 1 tables only; the organisation migrations follow `docs/M5_APPLY_CHECKLIST.md`.
+
+1. **Create the app tables** (as `portal_owner`):
    ```bash
-   psql -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/001_app_tables.sql
+   psql -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/001_app_tables.sql
    ```
 2. **Create the `portal_app` role** (needs a role that can create roles, e.g. `postgres`):
    ```bash
    cp db/migrations/003_portal_app_role.sql.example db/migrations/003_portal_app_role.sql
    # edit the password, then:
-   sudo -u postgres psql -d jaysnet_data -f db/migrations/003_portal_app_role.sql
+   sudo -u postgres psql -d omnimetrics_portal -f db/migrations/003_portal_app_role.sql
    ```
 3. **Create `apps/web/.env.local`** from the example and fill in real values:
    ```bash
@@ -31,7 +43,7 @@ Run from the repo root as user `omni` (Node 22, pnpm 12).
    node scripts/hash-password.mjs
    cp db/migrations/002_seed_admin.sql.example db/migrations/002_seed_admin.sql
    # paste the hash, set username/email, then:
-   psql -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/002_seed_admin.sql
+   psql -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/002_seed_admin.sql
    ```
 
 ## Run

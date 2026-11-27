@@ -16,12 +16,13 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
   const [members, setMembers] = useState<MemberRow[]>([])
   const [sel, setSel] = useState<string | null>(null)
   const [sessions, setSessions] = useState<SessionRow[]>([])
+  const [unavailable, setUnavailable] = useState(false) // pg has no session list yet: "none" would be untrue
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
   const [busy, run] = useBusy()
   const [issued, setIssued] = useState<IssuedPassword | null>(null)
   const dismissIssued = useCallback(() => setIssued(null), [])
   const loadMembers = useCallback(async () => { const r = await api<{ members: MemberRow[] }>(u, 'GET'); if (r.ok) setMembers(r.data.members); else setMsg({ text: r.error, error: true }) }, [u])
-  const loadSessions = useCallback(async (id: string) => { const r = await api<{ sessions: SessionRow[] }>(`${a}?userId=${encodeURIComponent(id)}`, 'GET'); if (r.ok) setSessions(r.data.sessions) }, [a])
+  const loadSessions = useCallback(async (id: string) => { const r = await api<{ sessions: SessionRow[] }>(`${a}?userId=${encodeURIComponent(id)}`, 'GET'); if (r.ok) setSessions(r.data.sessions); setUnavailable(!r.ok) }, [a])
   useEffect(() => { void loadMembers() }, [loadMembers])
   useEffect(() => { if (sel) void loadSessions(sel) }, [sel, loadSessions])
   const selMember = members.find((m) => m.userId === sel)
@@ -31,8 +32,8 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
     setMsg(r.ok ? { text: r.data.message } : { text: r.error, error: true })
     if (r.ok) setIssued({ username: m.username, password: r.data.oneTimePassword, trigger })
   })
-  const deactivate = (m: MemberRow) => run(async () => { const r = await api(u, 'POST', { op: 'update', userId: m.userId, active: !m.active }); setMsg(r.ok ? { text: `${m.username} ${m.active ? 'deactivated' : 'activated'} (mock).` } : { text: r.error, error: true }); await loadMembers() })
-  const revoke = (s: SessionRow) => run(async () => { const r = await api(a, 'POST', { op: 'revoke', sessionId: s.id }); setMsg(r.ok ? { text: 'Session revoked (mock).' } : { text: r.error, error: true }); if (sel) await loadSessions(sel) })
+  const deactivate = (m: MemberRow) => run(async () => { const r = await api(u, 'POST', { op: 'update', userId: m.userId, active: !m.active }); setMsg(r.ok ? { text: `${m.username} ${m.active ? 'deactivated' : 'activated'}.` } : { text: r.error, error: true }); await loadMembers() })
+  const revoke = (s: SessionRow) => run(async () => { const r = await api(a, 'POST', { op: 'revoke', sessionId: s.id }); setMsg(r.ok ? { text: 'Session revoked.' } : { text: r.error, error: true }); if (sel) await loadSessions(sel) })
 
   return (
     <PageFrame title="Accounts" description={`${orgName}: login security for members. Your own page is under your name, top right (My account).`}>
@@ -58,7 +59,7 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
         <GlassPanel tone="data" className="overflow-hidden">
           <div data-scroll="sessions" className="max-h-[28rem] min-h-0 overflow-y-auto overscroll-contain p-3 scroll-token" tabIndex={0} role="region" aria-label="Active sessions">
             <h2 className="mb-2 font-display text-sm font-semibold">{selMember ? `Active sessions: ${selMember.username}` : 'Active sessions'}</h2>
-            {!sel ? <p className="text-sm text-brand-text-muted">Select a member to see their sessions.</p> : sessions.length === 0 ? <p className="text-sm text-brand-text-muted">No active sessions.</p> : (
+            {!sel ? <p className="text-sm text-brand-text-muted">Select a member to see their sessions.</p> : unavailable ? <p className="text-sm text-brand-text-muted">The session list is not available.</p> : sessions.length === 0 ? <p className="text-sm text-brand-text-muted">No active sessions.</p> : (
               <ul className="space-y-2">
                 {sessions.map((s) => (
                   <li key={s.id} className="flex list-none items-start justify-between gap-2 rounded-md border border-brand-border p-2 text-xs">

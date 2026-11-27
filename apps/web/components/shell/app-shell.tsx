@@ -1,5 +1,6 @@
 'use client'
 
+import { PortalModeProvider } from '@/components/admin/portal-mode'
 import { useEffect, type ReactNode } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -131,7 +132,9 @@ export function AppShell({
             </div>
           </GlassPanel>
         </header>
-        <main className={cn('min-w-0 flex-1', shell.main)}>{children}</main>
+        <main className={cn('min-w-0 flex-1', shell.main)}>
+          <PortalModeProvider value={mode}>{children}</PortalModeProvider>
+        </main>
       </div>
     </div>
   )

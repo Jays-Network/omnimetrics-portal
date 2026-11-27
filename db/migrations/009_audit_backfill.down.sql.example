@@ -1,5 +1,5 @@
 -- 009_audit_backfill.down.sql.example
--- Rollback of 009. RUN AS: jaysnet_admin. Roll back 010 FIRST (RLS blocks the owner here
+-- Rollback of 009. RUN AS: portal_owner, in omnimetrics_portal. Roll back 010 FIRST (RLS blocks the owner here
 -- unless app.org_id is set, and 010's down restores plain tables).
 --
 -- Undoes: the app_user_projects -> memberships FK, the org_id values on app_user_projects

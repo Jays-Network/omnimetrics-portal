@@ -28,6 +28,8 @@ visualization layer for the OmniMetrics logistics/fleet tracking platform operat
 
 ## 2. Production Environment
 
+> **Superseded (Jay's ruling, 2026-11-27, `docs/DECISIONS.md` "Portal database"):** `jaysnet_data` is an EXTERNAL data source, like any client's database: read only, through integrations. The portal's own tables live in a separate database, `omnimetrics_portal` (owner `portal_owner`). Where the older text below places them in `jaysnet_data`, this note wins.
+
 | Item | Detail |
 |---|---|
 | Host | OmniMetrics LXC — Ubuntu 24.04, 5 cores, 10GB RAM, 200GB disk, 8GB swap |
@@ -35,7 +37,7 @@ visualization layer for the OmniMetrics logistics/fleet tracking platform operat
 | LXC IP | `192.168.15.32` |
 | DDNS | `omnimetrics.dns.jays-network.com` |
 | Remote access | Twingate |
-| PostgreSQL | Port 5432, DB: `jaysnet_data`, users: `jaysnet_admin`, `grafana_reader` (Grafana only), `portal_reader` (portal dashboards, new) |
+| PostgreSQL | Port 5432. Portal DB `omnimetrics_portal`: `portal_owner` (migrations), `portal_app`, `portal_platform`. External source `jaysnet_data`: `portal_reader_wr`, `portal_reader_adars` (read only), `grafana_reader` (Grafana only) |
 | Grafana (existing) | Port 3000 — stays running during transition, decommission in Phase 5 |
 | Portal (new) | Port 3002 — Next.js serves both frontend AND API routes. Port 3001 is OmniOrchestrator and stays separate |
 
@@ -53,9 +55,13 @@ Everything runs inside one Next.js process. No separate backend service.
     │
 [Next.js :3002]  ← App Router pages + /api/* route handlers
     │
-[PostgreSQL :5432 — jaysnet_data]
-    ├── jaysnet_admin   → app_users writes + dashboard reads
-    └── portal_reader   → dashboard reads (read-only, dedicated role; grafana_reader stays for Grafana)
+[PostgreSQL :5432]
+    ├── omnimetrics_portal (the portal's own: app_* tables)
+    │      ├── portal_app       → organisation-scoped reads and writes
+    │      └── portal_platform  → director-only platform actions
+    └── jaysnet_data (EXTERNAL source, reached through integrations, read only)
+           ├── portal_reader_wr / portal_reader_adars
+           └── grafana_reader   (Grafana only)
 ```
 
 ### Package Selections
@@ -345,7 +351,9 @@ export async function GET(request: NextRequest) {
 
 ## 8. Database Schema Additions
 
-Run against `jaysnet_data`. **Do not touch existing tables.**
+> **Superseded (Jay's ruling, 2026-11-27, `docs/DECISIONS.md` "Portal database"):** these tables live in `omnimetrics_portal`, not in `jaysnet_data`; the current schema is `db/migrations/`.
+
+~~Run against `jaysnet_data`.~~ **Do not touch existing tables.**
 
 ```sql
 CREATE TABLE app_users (
@@ -454,9 +462,15 @@ arrives via Cloudflare or a tunnel, `$remote_addr` is Cloudflare's address, so s
 from Cloudflare's IP ranges.
 
 ### `.env.local`
+> **Superseded (Jay's ruling, 2026-11-27, `docs/DECISIONS.md` "Portal database"):** the earlier `DATABASE_URL` lines pointed at `jaysnet_data` as `jaysnet_admin`.
+
 ```env
-DATABASE_URL=postgresql://jaysnet_admin:PASSWORD@localhost:5432/jaysnet_data
-DATABASE_URL_READONLY=postgresql://portal_reader:PASSWORD@localhost:5432/jaysnet_data
+# the portal's own database
+DATABASE_URL=postgresql://portal_app:PASSWORD@localhost:5432/omnimetrics_portal
+DATABASE_URL_PLATFORM=postgresql://portal_platform:PASSWORD@localhost:5432/omnimetrics_portal
+# external source, read only (managed integrations)
+DATABASE_URL_READONLY_WR=postgresql://portal_reader_wr:PASSWORD@localhost:5432/jaysnet_data
+DATABASE_URL_READONLY_ADARS=postgresql://portal_reader_adars:PASSWORD@localhost:5432/jaysnet_data
 JWT_SECRET=<openssl rand -hex 32>
 JWT_EXPIRE_HOURS=24
 NEXT_PUBLIC_BRAND_NAME=OmniMetrics
@@ -617,7 +631,7 @@ components/layout/CarouselController.tsx  ← Dashboard rotation with Motion tra
 - [ ] Install Node.js 22 LTS + pnpm on LXC
 - [ ] Scaffold Turborepo with `apps/web` + `packages/types`
 - [ ] Init Next.js 15, install full package set
-- [ ] `lib/db.ts` postgres client + test connection to `jaysnet_data`
+- [ ] `lib/db.ts` postgres client + test connection to `jaysnet_data` (superseded 2026-11-27: the app tables are in `omnimetrics_portal`)
 - [ ] Auth routes (login/logout/me) + `requireAuth()` helper
 - [ ] `app_users` + `app_user_projects` tables created
 - [ ] Login page (full-screen, branded with CSS variables)
@@ -706,6 +720,8 @@ Transporter CASE: INARA, BRIDGE SHIPPING, AFRICLAN, BHL LOGISTICS, NYATI, CML, R
 ---
 
 ## 15. First Commands for New Chat
+
+> **Superseded (Jay's ruling, 2026-11-27, `docs/DECISIONS.md` "Portal database"):** check for the app tables in `omnimetrics_portal` (`psql -U portal_owner -d omnimetrics_portal`); the `jaysnet_data` command below is historical.
 
 Run on OmniMetrics LXC, paste output, then say: **"Start Phase 1 — Foundation."**
 

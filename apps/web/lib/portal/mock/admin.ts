@@ -2,6 +2,8 @@ import type { Capability, OrgAccess, Role } from '@omnimetrics/types'
 import { LAST_ADMIN, NAME_UNAVAILABLE, OWN_MEMBERSHIP, OWN_RESET, SHARED_LOGIN, WRONG_CURRENT, newOneTimePassword, passwordProblem } from '@/lib/admin/password'
 import type { AllowedHost, AuditEntry, HostInput, IntegrationInput, IntegrationRow, MemberRow, Membership, OrgProfile, Result, SessionRow } from '@/lib/admin/types'
 import { redact } from '@/lib/admin/redact'
+import { reservedHost } from '@/lib/integrations/target-guard'
+import { CREDENTIALS_REQUIRED, CREDENTIALS_REQUIRED_ON_MOVE, HOST_LISTED, HOST_NOT_ALLOWED, HOST_RESERVED, INTEGRATION_NAME_TAKEN, MANAGED_NO_DELETE, MANAGED_NO_EDIT, hostInUse, portOutOfRange, testsLimited } from '@/lib/admin/integration-messages'
 import { PartialSettingsSchema, SETTING_KEYS, resolveSettings, type PartialSettings, type Resolved, type Scope, type SettingKey } from '@/lib/settings/model'
 import { LOCAL_ROW, FOLDERS, clock, db, nextId, type MMember } from './admin-store'
 
@@ -38,21 +40,25 @@ export const integrations = {
     if (!can(c, 'integrations.manage')) return forbid()
     const list = db().integrations.get(c.org.id) ?? []
     db().integrations.set(c.org.id, list)
+    const existing = input.id ? list.find((r) => r.id === input.id) : undefined
+    if (input.id && !existing) return notFound() // an id from another organisation lands here too
+    if (existing?.managed) return invalid(MANAGED_NO_EDIT)
+    if (reservedHost(input.host)) return invalid(HOST_RESERVED) // as pg: only managed rows reach this machine
     // Host must be an allowlisted entry and the port inside its range. Free text is refused.
     const entry = db().hosts.find((h) => h.host.toLowerCase() === input.host.toLowerCase())
-    if (!entry) return invalid('That host is not on the allowed list. Ask the director to add it.')
-    if (input.port < entry.portMin || input.port > entry.portMax) return invalid(`Port ${input.port} is outside the allowed range ${entry.portMin} to ${entry.portMax} for this host.`)
-    if (list.some((r) => r.name.toLowerCase() === input.name.toLowerCase() && r.id !== input.id)) return invalid('Another integration already uses that name.')
+    if (!entry) return invalid(HOST_NOT_ALLOWED)
+    if (input.port < entry.portMin || input.port > entry.portMax) return invalid(portOutOfRange(input.port, entry.portMin, entry.portMax))
+    if (list.some((r) => r.name.toLowerCase() === input.name.toLowerCase() && r.id !== input.id)) return invalid(INTEGRATION_NAME_TAKEN)
     const secret = input.credentials?.trim() ? input.credentials : undefined
     let row: IntegrationRow
-    if (input.id) {
-      const cur = list.find((r) => r.id === input.id)
-      if (!cur) return notFound() // an id from another organisation lands here too
-      if (cur.managed) return invalid('The managed local database cannot be edited.')
+    if (existing) {
+      const cur = existing
+      const moved = cur.host.toLowerCase() !== entry.host.toLowerCase() || cur.port !== input.port || cur.database !== input.database || cur.sslMode !== input.sslMode
+      if (moved && !secret) return invalid(CREDENTIALS_REQUIRED_ON_MOVE)
       row = { ...cur, name: input.name, host: entry.host, port: input.port, database: input.database, relations: input.relations, sslMode: input.sslMode }
       list[list.indexOf(cur)] = row
     } else {
-      if (!secret) return invalid('Credentials are required for a new integration.')
+      if (!secret) return invalid(CREDENTIALS_REQUIRED)
       row = { id: nextId('int'), name: input.name, kind: 'postgres', host: entry.host, port: input.port, database: input.database, relations: input.relations, sslMode: input.sslMode, status: 'untested', managed: false, hasCredentials: false, keyId: null, rotatedAt: null, lastTest: null, usedBy: 0 }
       list.push(row)
     }
@@ -60,7 +66,7 @@ export const integrations = {
       db().vault.set(`${c.org.id}:${row.id}`, secret)
       Object.assign(row, { hasCredentials: true, keyId: 'k1', rotatedAt: nowIso() })
     }
-    audit(c, actor, input.id ? 'integration.update' : 'integration.create', 'integration', row.id, { name: row.name, host: row.host, port: row.port, credentials: secret ? 'replaced' : 'kept', input })
+    audit(c, actor, input.id ? 'integration.update' : 'integration.create', 'integration', row.id, { name: row.name, host: row.host, port: row.port, credentials: secret ? 'replaced' : 'kept', input: { ...input, username: undefined } })
     return { ok: true, row: publicRow(row) }
   },
   remove(c: Ctx, actor: Actor, id: string): Result {
@@ -68,7 +74,7 @@ export const integrations = {
     const list = orgIntegrations(c)
     const cur = list.find((r) => r.id === id)
     if (!cur) return notFound()
-    if (cur.managed) return invalid('The managed local database cannot be deleted.')
+    if (cur.managed) return invalid(MANAGED_NO_DELETE)
     db().integrations.set(c.org.id, list.filter((r) => r !== cur))
     db().vault.delete(`${c.org.id}:${id}`)
     audit(c, actor, 'integration.delete', 'integration', id, { name: cur.name })
@@ -85,10 +91,10 @@ export const integrations = {
     if (recent.length >= 5) {
       const wait = Math.max(1, Math.ceil((60_000 - (t - recent[0]!)) / 1000))
       audit(c, actor, 'integration.test.limited', 'integration', id)
-      return { ok: false, code: 'rate_limited', error: `Too many connection tests. Try again in ${wait} seconds (limit: 5 per minute).` }
+      return { ok: false, code: 'rate_limited', error: testsLimited(wait, 5) }
     }
     db().tests.set(key, [...recent, t])
-    const ok = cur.managed || (cur.hasCredentials && !/fail/i.test(cur.database))
+    const ok = cur.managed || (cur.hasCredentials && !reservedHost(cur.host) && !/fail/i.test(cur.database))
     cur.lastTest = { ok, at: nowIso(), message: ok ? 'Connected (mock).' : 'Could not connect (mock). Check the host, port, database and credentials.' }
     if (!cur.managed) cur.status = ok ? 'ok' : 'failed'
     audit(c, actor, 'integration.test', 'integration', id, { ok })
@@ -105,7 +111,7 @@ export const integrations = {
     },
     add(c: Ctx, actor: Actor, h: HostInput): Result<{ host: AllowedHost }> {
       if (!can(c, 'hosts.manage')) return forbid() // director only
-      if (db().hosts.some((x) => x.host.toLowerCase() === h.host.toLowerCase())) return invalid('That host is already on the list.')
+      if (db().hosts.some((x) => x.host.toLowerCase() === h.host.toLowerCase())) return invalid(HOST_LISTED)
       const row = { id: nextId('h'), ...h }
       db().hosts.push(row)
       audit(null, actor, 'host.add', 'host', row.id, { ...h })
@@ -116,7 +122,7 @@ export const integrations = {
       const h = db().hosts.find((x) => x.id === id)
       if (!h) return notFound()
       const used = [...db().integrations.values()].flat().filter((r) => !r.managed && r.host.toLowerCase() === h.host.toLowerCase()).length
-      if (used > 0) return invalid(`In use by ${used} integration${used === 1 ? '' : 's'}. Remove those first.`)
+      if (used > 0) return invalid(hostInUse(used))
       db().hosts = db().hosts.filter((x) => x !== h)
       audit(null, actor, 'host.remove', 'host', id, { host: h.host })
       return { ok: true }

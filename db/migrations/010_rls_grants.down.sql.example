@@ -1,7 +1,7 @@
 -- 010_rls_grants.down.sql.example
 -- Rollback of 010: removes every policy, turns RLS off, drops the helper functions, and
--- returns portal_app to the 003 privilege set. RUN AS: jaysnet_admin. FIRST rollback step.
---   psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -f <this file>
+-- returns portal_app to the 003 privilege set. RUN AS: portal_owner, in omnimetrics_portal. FIRST rollback step.
+--   psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U portal_owner -d omnimetrics_portal -f <this file>
 --   (-v platform_role is optional: default portal_platform. The role itself is dropped by 003b's down file.)
 --
 -- Every policy is dropped by the loop below, including the three RESTRICTIVE ones on

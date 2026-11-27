@@ -2,9 +2,10 @@
 -- Organisations, platform-admin flag, per-org memberships, org-scoped tracking scope.
 -- PLAN_BUILDER sections 3 and A.
 --
--- RUN AS:  jaysnet_admin (owner of the app_* tables from 001). NOT postgres: new
+-- RUN AS:  portal_owner (owner_role; owner of the app_* tables from 001), in the portal's own database
+--          (portal_db, default omnimetrics_portal). NOT postgres: new
 --          tables must have the same owner as the 001 tables.
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/005_orgs_memberships.sql
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/005_orgs_memberships.sql
 --   (copy from .example first, or run the .example directly: it holds no secret)
 -- Rollback: 005_orgs_memberships.down.sql.example
 --
@@ -14,7 +15,7 @@
 -- old app_users.role stays (legacy, read by the current code until M5 app cut-over).
 --
 -- PLATFORM ADMIN (manual, never from the app or this file). After 005, Jay runs ONE line
--- as jaysnet_admin or postgres, with his own username:
+-- as portal_owner or postgres, with his own username:
 --   UPDATE app_users SET is_platform_admin = true WHERE username = 'Jay';
 -- Verify: SELECT username, is_platform_admin FROM app_users;   -- exactly one true.
 -- (010 removes portal_app's right to write this column, so only a DB-level admin can.)

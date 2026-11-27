@@ -22,12 +22,12 @@ export interface AuditInput {
 const SECRET_KEY = /passw|pwd|secret|token|hash|credential|api_?key|private_?key|cookie|authori[sz]ation/i
 const SECRET_VALUE = /\$2[abxy]\$\d{2}\$|eyJ[\w-]{8,}\.[\w-]{8,}\./ // bcrypt hash, JWT
 
-/** Deny-list over the detail JSON: secret-looking keys and values never reach the log. */
+/** Deny-list over the detail JSON: secret-looking keys and values never reach the log. A yes/no flag is not a secret. */
 export function safeDetail(detail: Record<string, unknown>): Record<string, unknown> {
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return SECRET_VALUE.test(v) ? '[redacted]' : v
     if (Array.isArray(v)) return v.map(walk)
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SECRET_KEY.test(k) ? '[redacted]' : walk(x)]))
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SECRET_KEY.test(k) && typeof x !== 'boolean' ? '[redacted]' : walk(x)]))
     return v
   }
   return walk(redact(detail)) as Record<string, unknown>

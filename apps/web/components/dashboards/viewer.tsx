@@ -1,5 +1,6 @@
 'use client'
 
+import { usePortalMode } from '@/components/admin/portal-mode'
 import Link from 'next/link'
 import { ChevronRight, Lock } from 'lucide-react'
 import { useState } from 'react'
@@ -48,6 +49,7 @@ function Breadcrumbs({ nodeId, fallback }: { nodeId: string; fallback: Dashboard
 }
 
 function AccessPanel({ view }: { view: DashboardView }) {
+  const mode = usePortalMode()
   return (
     <GlassPanel tone="data" className="mt-3 p-4" aria-labelledby="access-heading">
       <div className="mb-2 flex items-center gap-2">
@@ -86,7 +88,7 @@ function AccessPanel({ view }: { view: DashboardView }) {
           </table>
         </div>
       ) : null}
-      <p className="mt-2 text-xs text-brand-text-muted">Grants are edited in Admin &gt; Users (M4). Mock data.</p>
+      <p className="mt-2 text-xs text-brand-text-muted">{mode === 'mock' ? 'Mock data.' : 'Panels show sample data until datasets are connected.'}</p>
     </GlassPanel>
   )
 }

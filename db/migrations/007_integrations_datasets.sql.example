@@ -2,13 +2,13 @@
 -- Allowed hosts (SSRF allowlist), integrations (encrypted credential columns),
 -- dataset catalogue and field allowlist. PLAN_BUILDER sections 5 and A.
 --
--- RUN AS:  jaysnet_admin.   After 006.
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/007_integrations_datasets.sql
+-- RUN AS:  portal_owner, in omnimetrics_portal. After 006.
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/007_integrations_datasets.sql
 -- Rollback: 007_integrations_datasets.down.sql.example
 --
--- NO CREDENTIAL IS STORED BY THIS FILE, and it seeds no integration and no host (the
--- local jaysnet_data integrations and the localhost allowlist entries are created later
--- through the portal by the director, after the isolation tests are green). The
+-- NO CREDENTIAL IS STORED BY THIS FILE, and it seeds no integration and no host (the managed
+-- integrations that point at the external database jaysnet_data, and the localhost allowlist
+-- entry, are seeded by 011). The
 -- cred_* columns exist empty; the CHECKs only describe their shape:
 --   * credential_source = 'stored'      -> cred_ciphertext, cred_nonce, cred_key_id are
 --                                          either all NULL (not entered yet) or all set;

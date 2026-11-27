@@ -31,8 +31,6 @@ describe('pg portal fails closed where nothing is built yet', () => {
   it('throws instead of falling back to the mock', () => {
     const calls: (() => unknown)[] = [
       pgPortal.users.memberships, pgPortal.accounts.sessions, pgPortal.accounts.revoke, pgPortal.account.sessions, pgPortal.account.revoke,
-      ...Object.values(pgPortal.integrations.hosts),
-      pgPortal.integrations.list, pgPortal.integrations.save, pgPortal.integrations.remove, pgPortal.integrations.test, pgPortal.integrations.audit,
     ] as never
     for (const call of calls) expect(call).toThrow(/not implemented/)
   })
@@ -45,6 +43,8 @@ describe('pg portal fails closed where nothing is built yet', () => {
       pgPortal.organisations.list(forged), pgPortal.organisations.create(forged, actor, 'n'), pgPortal.organisations.update(forged, actor, 'i', {}),
       pgPortal.users.list(forged), pgPortal.users.add(forged, actor, { username: 'abc', email: 'a@b.test', role: 'viewer' }),
       pgPortal.users.link(forged, actor, { username: 'abc', role: 'viewer' }), pgPortal.users.update(forged, actor, 'i', {}),
+      pgPortal.integrations.list(forged), pgPortal.integrations.remove(forged, actor, 'i'), pgPortal.integrations.test(forged, actor, 'i'),
+      pgPortal.integrations.audit(forged), pgPortal.integrations.hosts.list(forged), pgPortal.integrations.hosts.remove(forged, actor, 'i'),
       pgPortal.accounts.resetPassword(forged, actor, 'i'), pgPortal.settings.get(forged, actor), pgPortal.settings.set(forged, actor, 'user', {}),
     ]) await expect(call).rejects.toThrow(/not issued by requireOrg/)
   })

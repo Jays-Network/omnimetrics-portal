@@ -4,6 +4,7 @@ import type { Portal } from '../types'
 import * as account_ from './account'
 import * as content from './content'
 import * as dashboards from './dashboards'
+import * as integrationsRepo from './integrations'
 import { assertOrgCtx, type OrgCtx } from './org'
 import * as organisationsRepo from './organisations'
 import * as orgs from './orgs'
@@ -21,13 +22,17 @@ const todo = (name: string) => (): never => {
   throw new Error(`Portal pg: ${name} is not implemented yet`)
 }
 
-const integrations: typeof A.integrations = {
-  list: todo('integrations.list'),
-  save: todo('integrations.save'),
-  remove: todo('integrations.remove'),
-  test: todo('integrations.test'),
-  audit: todo('integrations.audit'),
-  hosts: { list: todo('integrations.hosts.list'), add: todo('integrations.hosts.add'), remove: todo('integrations.hosts.remove') },
+const integrations: Portal['integrations'] = {
+  list: async (c) => integrationsRepo.list(own(c)),
+  save: async (c, actor, input) => integrationsRepo.save(own(c), actor, input),
+  remove: async (c, actor, id) => integrationsRepo.remove(own(c), actor, id),
+  test: async (c, actor, id) => integrationsRepo.test(own(c), actor, id),
+  audit: async (c) => integrationsRepo.audit(own(c)),
+  hosts: {
+    list: async (c) => integrationsRepo.listHosts(own(c)),
+    add: async (c, actor, host) => integrationsRepo.addHost(own(c), actor, host),
+    remove: async (c, actor, id) => integrationsRepo.removeHost(own(c), actor, id),
+  },
 }
 const organisations: Portal['organisations'] = {
   list: async (c) => organisationsRepo.list(own(c)),

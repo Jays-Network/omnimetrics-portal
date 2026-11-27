@@ -1,4 +1,10 @@
 -- 004_portal_reader_roles.sql.example
+--
+-- !!! THIS FILE (with its down file) IS THE ONLY CHANGE TO THE EXTERNAL DATABASE jaysnet_data. !!!
+-- It runs in jaysnet_data (source_db), NOT in the portal's own database. Everything it creates there is
+-- the two read-only reader roles and their grants (CONNECT, schema USAGE, SELECT on one table each).
+-- Optional: -v source_db=<database>   (default jaysnet_data)
+--
 -- One read-only database role PER ORGANISATION for tracking reads (R7, Jay's
 -- decision F6, 2026-11-20). Replaces the single `portal_reader` idea.
 --
@@ -94,11 +100,17 @@
 --     WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f')
 --       AND has_table_privilege(r.rolname, c.oid, p.priv)
 --     ORDER BY 1, 2, 3;                 -- expect 2 rows: each role / its table / SELECT
---   -- 5. no app_* access (expect all false)
+--   -- 5. no app_* access (expect all false; only meaningful while the legacy app_users copy is still in
+--   --    jaysnet_data: where the table does not exist this errors, which is also fine)
 --   SELECT has_table_privilege('portal_reader_wr','app_users','SELECT'), has_table_privilege('portal_reader_adars','app_users','SELECT');
 --   -- 6. connection test (from the app host, AFTER \password was set for both roles):
 --   --    psql "postgresql://portal_reader_wr@localhost:5432/jaysnet_data" -c "SHOW timezone" -c "SHOW default_transaction_read_only"
 --   --    -c "SELECT count(*) FROM adars_tracking"   -- expect: permission denied for table adars_tracking
+
+\if :{?source_db}
+\else
+    \set source_db jaysnet_data
+\endif
 
 BEGIN;
 
@@ -119,7 +131,7 @@ ALTER ROLE portal_reader_adars SET timezone = 'Africa/Johannesburg';
 -- Connection and schema lookup: the minimum a role needs to run a SELECT.
 -- (PUBLIC already holds CONNECT on the database and USAGE on schema public by default;
 --  the explicit grants make the intent visible and survive a later REVOKE FROM PUBLIC.)
-GRANT CONNECT ON DATABASE jaysnet_data TO portal_reader_wr, portal_reader_adars;
+GRANT CONNECT ON DATABASE :"source_db" TO portal_reader_wr, portal_reader_adars;
 GRANT USAGE ON SCHEMA public TO portal_reader_wr, portal_reader_adars;
 
 -- The ONLY two grants on tracking data in the whole migration set.

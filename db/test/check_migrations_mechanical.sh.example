@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# check_migrations_mechanical.sh.example
+# Proves that the changes to db/migrations since a git ref are MECHANICAL: only comments, psql variables
+# and the database name they stand for. No database is touched.
+#
+#   bash db/test/check_migrations_mechanical.sh.example [ref]      (default ref: HEAD)
+#
+# For every migration file, old and new are reduced to their executable lines:
+#   1. blank lines and whole-line comments are dropped;
+#   2. the variable plumbing is dropped, in exactly these forms:
+#        \if :{?portal_db|source_db}   \else   \endif
+#        \set portal_db omnimetrics_portal          \set source_db jaysnet_data
+#        SELECT set_config('app.migr_source_db', :'source_db', true);
+#   3. in a GRANT/REVOKE CONNECT ON DATABASE line, :"portal_db" or :"source_db" becomes jaysnet_data;
+#      current_setting('app.migr_source_db') becomes 'jaysnet_data'.
+# What is left must be IDENTICAL, line for line. So a changed policy, grant, CHECK, trigger, function or
+# role list fails. A new or deleted migration file fails too.
+
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REF="${1:-HEAD}"
+cd "$REPO"
+git rev-parse --verify --quiet "$REF^{commit}" >/dev/null || { echo "unknown ref: $REF" >&2; exit 2; }
+
+reduce() {
+  # The three blocks that exist only to give a variable its default are removed as whole blocks, so a
+  # stray \else or \endif elsewhere still counts as a change.
+  awk '
+    /^[[:space:]]*$/ || /^[[:space:]]*--/ { next }
+    /^\\if :\{\?(portal_db|source_db)\}$/ { held = $0; state = 1; next }
+    state == 1 && $0 == "\\else" { held = held "\n" $0; state = 2; next }
+    state == 2 && /^    \\set (portal_db omnimetrics_portal|source_db jaysnet_data)$/ {
+      name = held; sub(/^\\if :\{\?/, "", name); sub(/\}.*/, "", name)
+      if ($2 == name) { held = held "\n" $0; state = 3; next }
+    }
+    state == 3 && $0 == "\\endif" { state = 0; held = ""; next }
+    state { print held; state = 0; held = "" }
+    $0 == "SELECT set_config(\047app.migr_source_db\047, :\047source_db\047, true);" { next }
+    { print }
+    END { if (state) print held }
+  ' | sed -E \
+      -e "/^(GRANT|REVOKE) CONNECT ON DATABASE /s/ DATABASE :\"(portal_db|source_db)\" / DATABASE jaysnet_data /" \
+      -e "s/current_setting\('app\.migr_source_db'\)/'jaysnet_data'/g"
+}
+
+failed=0
+changed=0
+files="$( { git ls-tree -r --name-only "$REF" -- db/migrations; git ls-files --cached --others --exclude-standard -- db/migrations; } | sort -u )"
+printf '%-52s %8s %8s  %s\n' file added removed verdict
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  if ! git cat-file -e "$REF:$f" 2>/dev/null; then
+    printf '%-52s %8s %8s  %s\n' "${f#db/migrations/}" - - 'FAIL (new file)'; failed=1; continue
+  fi
+  if [[ ! -f "$f" ]]; then
+    printf '%-52s %8s %8s  %s\n' "${f#db/migrations/}" - - 'FAIL (deleted)'; failed=1; continue
+  fi
+  git diff --quiet "$REF" -- "$f" && continue
+  read -r added removed _ < <(git diff --numstat "$REF" -- "$f")
+  changed=$((changed + 1))
+  if difference="$(diff <(git show "$REF:$f" | reduce) <(reduce <"$f"))"; then
+    printf '%-52s %8s %8s  %s\n' "${f#db/migrations/}" "$added" "$removed" mechanical
+  else
+    printf '%-52s %8s %8s  %s\n' "${f#db/migrations/}" "$added" "$removed" FAIL
+    printf '%s\n' "$difference" | sed 's/^/    /'
+    failed=1
+  fi
+done <<<"$files"
+
+if [[ $failed -ne 0 ]]; then
+  echo "NOT mechanical (against $REF)." >&2
+  exit 1
+fi
+echo "OK: $changed changed file(s), all mechanical (against $REF)."

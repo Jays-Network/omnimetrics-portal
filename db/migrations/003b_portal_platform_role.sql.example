@@ -13,11 +13,13 @@
 --
 -- RUN AS:  postgres (CREATE ROLE is needed). By Jay, by hand. After 001, before 010
 --   (003 and 004 are unrelated and may run in any order relative to this file).
---   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/003b_portal_platform_role.sql.example
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/003b_portal_platform_role.sql.example
+--   Optional: -v portal_db=<database>   (default omnimetrics_portal). If the role already exists,
+--   CREATE ROLE fails and nothing changes: see docs/M5_APPLY_CHECKLIST.md section 0A.
 --
 -- NO PASSWORD IS IN THIS FILE. LOGIN without a password cannot authenticate (scram/md5).
 -- MANUAL STEP right after, as postgres, interactively:
---   sudo -u postgres psql -d jaysnet_data
+--   sudo -u postgres psql -d omnimetrics_portal
 --   \password portal_platform
 -- (generate with: openssl rand -base64 32; it goes into DATABASE_URL_PLATFORM only).
 -- Check pg_hba.conf first: a `trust` line matching this role would let it in without a password.
@@ -35,6 +37,11 @@
 --     WHERE r.rolname = 'portal_platform';                      -- {statement_timeout=10s}
 --   SELECT has_table_privilege('portal_platform','app_users','SELECT');   -- false (010 grants nothing there)
 
+\if :{?portal_db}
+\else
+    \set portal_db omnimetrics_portal
+\endif
+
 BEGIN;
 
 CREATE ROLE portal_platform LOGIN
@@ -42,7 +49,7 @@ CREATE ROLE portal_platform LOGIN
 
 ALTER ROLE portal_platform SET statement_timeout = '10s';
 
-GRANT CONNECT ON DATABASE jaysnet_data TO portal_platform;
+GRANT CONNECT ON DATABASE :"portal_db" TO portal_platform;
 GRANT USAGE ON SCHEMA public TO portal_platform;
 
 COMMIT;

@@ -157,3 +157,64 @@ describe('shared formatter reaches the UI helpers', () => {
     expect(screen.getByTestId('p').textContent).toBe('1,234,567.89|1,234,567.89')
   })
 })
+
+describe('Integrations: database user and an unsent key id', () => {
+  it('sends the database user with the password only, and shows no key id when the server sends none', async () => {
+    const calls: { body?: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ body: init?.body as string | undefined })
+      return new Response(JSON.stringify({ ok: true, rows: [row({ keyId: null })], hosts, audit: [], canManageHosts: false, row: row() }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const { IntegrationsView } = await import('@/components/admin/integrations-view')
+    render(<IntegrationsView orgSlug="worldrisk" orgName="WorldRisk" />)
+    fireEvent.click(await screen.findByRole('button', { name: /WR warehouse/ }))
+    expect(screen.getByRole('dialog').textContent).toMatch(/Saved, rotated/)
+    expect(screen.getByRole('dialog').textContent).not.toMatch(/key/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit WR warehouse' }))
+    expect(screen.queryByLabelText('Database user')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Replace credentials' }))
+    expect((screen.getByLabelText('Database user') as HTMLInputElement).value).toBe('')
+    fireEvent.change(screen.getByLabelText('Database user'), { target: { value: 'reader' } })
+    fireEvent.change(screen.getByLabelText('New credentials'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(calls.some((c) => c.body?.includes('"op":"save"'))).toBe(true))
+    const sent = JSON.parse(calls.find((c) => c.body?.includes('"op":"save"'))!.body!) as { input: object }
+    expect(sent.input).toMatchObject({ username: 'reader', credentials: 'pw' })
+  })
+})
+
+describe('Integrations: every SSL mode, and the wording per data layer', () => {
+  const stub = (rows: object[]) => {
+    const calls: { body?: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ body: init?.body as string | undefined })
+      return new Response(JSON.stringify({ ok: true, rows, hosts, audit: [], canManageHosts: false, row: rows[0] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    return calls
+  }
+
+  it.each(['verify-ca', 'disable'])('a %s row shows its mode, and editing keeps it', async (sslMode) => {
+    const calls = stub([row({ sslMode })])
+    const { IntegrationsView } = await import('@/components/admin/integrations-view')
+    render(<IntegrationsView orgSlug="worldrisk" orgName="WorldRisk" />)
+    fireEvent.click(await screen.findByRole('button', { name: /WR warehouse/ }))
+    expect(screen.getByRole('dialog').textContent).toContain(`SSL mode${sslMode}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit WR warehouse' }))
+    expect((screen.getByLabelText('SSL mode') as HTMLSelectElement).value).toBe(sslMode)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(calls.some((c) => c.body?.includes('"op":"save"'))).toBe(true))
+    expect(JSON.parse(calls.find((c) => c.body?.includes('"op":"save"'))!.body!).input.sslMode).toBe(sslMode)
+  })
+
+  it('on pg nothing on the screen claims to be a mock', async () => {
+    stub([row()])
+    const { IntegrationsView } = await import('@/components/admin/integrations-view')
+    const { PortalModeProvider } = await import('@/components/admin/portal-mode')
+    render(<PortalModeProvider value="pg"><IntegrationsView orgSlug="worldrisk" orgName="WorldRisk" /></PortalModeProvider>)
+    await screen.findByRole('button', { name: /WR warehouse/ })
+    // (the made-up host name of the fixture is data, not wording)
+    expect(document.body.textContent!.replaceAll('db.mock-wr.internal', '')).not.toMatch(/mock|M5/i)
+    fireEvent.click(document.querySelector<HTMLElement>('[data-connector="postgres"]')!)
+    expect((await screen.findByRole('dialog')).textContent!.replaceAll('db.mock-wr.internal', '')).not.toMatch(/mock/i)
+  })
+})

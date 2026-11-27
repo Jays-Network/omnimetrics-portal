@@ -1,5 +1,5 @@
 -- 005_orgs_memberships.down.sql.example
--- Rollback of 005. RUN AS: jaysnet_admin. Roll back 010, 009, 008, 007, 006 FIRST
+-- Rollback of 005. RUN AS: portal_owner (owner_role) in the portal database omnimetrics_portal. Roll back 010, 009, 008, 007, 006 FIRST
 -- (this file drops app_memberships and app_orgs, which they reference).
 --
 -- DATA LOSS: drops every org and membership, and the org_id column of app_user_projects.

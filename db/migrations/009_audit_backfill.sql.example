@@ -3,8 +3,8 @@
 -- (2) Backfill: existing users -> memberships in WorldRisk; existing project rows -> WorldRisk.
 --     Nothing is created for ADARS.
 --
--- RUN AS:  jaysnet_admin.   After 005-008 and BEFORE 010 (the normal order).
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/009_audit_backfill.sql
+-- RUN AS:  portal_owner, in omnimetrics_portal. After 005-008 and BEFORE 010 (the normal order).
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/009_audit_backfill.sql
 -- Rollback: 009_audit_backfill.down.sql.example
 --
 -- RE-RUNNABLE: every statement is guarded (IF NOT EXISTS, ON CONFLICT DO NOTHING,

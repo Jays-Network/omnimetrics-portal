@@ -2,6 +2,7 @@
 -- Rollback of 004_portal_reader_roles.sql.example.
 -- RUN AS: postgres.   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f <this file, copied without .example>
 --
+-- Runs in the EXTERNAL database jaysnet_data (-v source_db=<database> to change it).
 -- Only REVOKEs the two SELECT grants this migration made to the two reader roles
 -- (needed before DROP ROLE succeeds), then drops the roles. Does not touch any other
 -- privilege on the tracking tables (grafana_reader and others are unaffected).
@@ -10,13 +11,18 @@
 --
 -- CHECK AFTER: SELECT rolname FROM pg_roles WHERE rolname LIKE 'portal_reader%';  -- expect 0 rows
 
+\if :{?source_db}
+\else
+    \set source_db jaysnet_data
+\endif
+
 BEGIN;
 
 REVOKE SELECT ON worldrisk_tracking FROM portal_reader_wr;
 REVOKE SELECT ON adars_tracking     FROM portal_reader_adars;
 
 REVOKE USAGE ON SCHEMA public FROM portal_reader_wr, portal_reader_adars;
-REVOKE CONNECT ON DATABASE jaysnet_data FROM portal_reader_wr, portal_reader_adars;
+REVOKE CONNECT ON DATABASE :"source_db" FROM portal_reader_wr, portal_reader_adars;
 
 DROP ROLE portal_reader_wr;      -- role-level settings are removed with the role
 DROP ROLE portal_reader_adars;

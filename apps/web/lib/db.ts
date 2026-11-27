@@ -6,6 +6,9 @@ type Sql = ReturnType<typeof postgres>
  * Lazily-created postgres.js clients, cached on globalThis so Next.js dev
  * hot reloads do not leak connection pools.
  *
+ * DATABASE_URL and DATABASE_URL_PLATFORM point at the PORTAL's own database. jaysnet_data is an external
+ * source, reached only through integrations.
+ *
  *  - getDb()         DATABASE_URL           portal_app role: app_* tables only (auth, users, audit log)
  *  - getReadonlyDb() DATABASE_URL_READONLY  portal_reader: tracking-data reads, 10s statement_timeout
  *  - getAppDb()      DATABASE_URL           portal_app: the M5 repositories, only through withOrg/withUser

@@ -3,17 +3,26 @@
 --
 -- The portal connects as portal_app (DATABASE_URL). It can touch ONLY
 -- app_users, app_user_projects and app_audit_log, and has no access to
--- worldrisk_tracking, adars_tracking or anything else. Tracking-data reads go
--- through grafana_reader (DATABASE_URL_READONLY).
+-- anything else. Tracking data lives in another database (jaysnet_data, an external
+-- source) and is read only through integrations, with the reader roles of 004.
 --
 -- Run AFTER 001_app_tables.sql, as a role that may create roles (e.g. the
 -- postgres superuser). Copy to a git-ignored name first and set a real password:
 --
 --   cp db/migrations/003_portal_app_role.sql.example db/migrations/003_portal_app_role.sql
 --   (edit the password)
---   sudo -u postgres psql -d jaysnet_data -f db/migrations/003_portal_app_role.sql
+--   sudo -u postgres psql -d omnimetrics_portal -f db/migrations/003_portal_app_role.sql
+--   Optional: -v portal_db=<database>   (default omnimetrics_portal)
+--
+-- Roles belong to the whole cluster: if portal_app already exists, CREATE ROLE fails and the file
+-- changes nothing. docs/M5_APPLY_CHECKLIST.md section 0A has the grants-only commands for that case.
 --
 -- (Run by you, by hand. Generate a password with: openssl rand -base64 32)
+
+\if :{?portal_db}
+\else
+    \set portal_db omnimetrics_portal
+\endif
 
 BEGIN;
 
@@ -23,7 +32,7 @@ CREATE ROLE portal_app LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD'
 -- Defence in depth: cap any single statement at 10s for this role.
 ALTER ROLE portal_app SET statement_timeout = '10s';
 
-GRANT CONNECT ON DATABASE jaysnet_data TO portal_app;
+GRANT CONNECT ON DATABASE :"portal_db" TO portal_app;
 GRANT USAGE ON SCHEMA public TO portal_app;
 
 -- Users: no DELETE (users are deactivated, not deleted).
@@ -38,7 +47,8 @@ GRANT USAGE, SELECT ON SEQUENCE app_audit_log_id_seq TO portal_app;
 
 COMMIT;
 
--- Optional checks after running (as the postgres superuser):
+-- Optional checks after running (as the postgres superuser, in the portal database; the two
+-- tracking tables do not exist there, so those two checks only apply to a database that has them):
 --   SELECT has_table_privilege('portal_app', 'worldrisk_tracking', 'SELECT');  -- expect false
 --   SELECT has_table_privilege('portal_app', 'adars_tracking',     'SELECT');  -- expect false
 --   SELECT has_table_privilege('portal_app', 'app_users',          'SELECT');  -- expect true

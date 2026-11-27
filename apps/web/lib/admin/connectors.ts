@@ -1,10 +1,15 @@
 import { Bell, Database, Globe, Plug, Truck, type LucideIcon } from 'lucide-react'
+import { z } from 'zod'
 
 /**
  * Connector catalogue (docs/PLAN_BUILDER.md section 5), data-driven like the panel registry: add a connector =
  * one entry here. Honest by construction: only `functional` connectors can be added, and every other status
  * must carry the reason shown on its card. No third-party brand logos; icons are generic and tinted by category.
  */
+/** What a stored database credential consists of: the JSON that is encrypted, validated on write and on read. */
+export const StoredCredentialSchema = z.object({ username: z.string().min(1).max(63), password: z.string().min(1).max(500) }).strict()
+export type StoredCredential = z.infer<typeof StoredCredentialSchema>
+
 export type ConnectorStatus = 'functional' | 'planned' | 'later' | 'deferred'
 export type ConnectorCategory = 'databases' | 'logistics' | 'notifications' | 'maps' | 'other'
 
@@ -27,17 +32,17 @@ export interface Connector {
   reason?: string
 }
 
-export const STATUS_LABEL: Record<ConnectorStatus, string> = { functional: 'Available (mock)', planned: 'Planned', later: 'Later', deferred: 'Deferred' }
+export const STATUS_LABEL: Record<ConnectorStatus, string> = { functional: 'Available', planned: 'Planned', later: 'Later', deferred: 'Deferred' }
 
 export const CONNECTORS: Connector[] = [
-  { id: 'postgres', name: 'PostgreSQL', publisher: 'Read-only SQL', category: 'databases', status: 'functional', description: 'Read tracking and reporting tables through an allowlisted host. Works in the mock; the real connector arrives in M5.' },
-  { id: 'supabase', name: 'Supabase', publisher: 'PostgreSQL-compatible', category: 'databases', status: 'planned', description: 'A hosted Postgres you already run.', reason: 'Planned: it will reuse the PostgreSQL connector once real connections exist (M5).' },
+  { id: 'postgres', name: 'PostgreSQL', publisher: 'Read-only SQL', category: 'databases', status: 'functional', description: 'Read tracking and reporting tables through an allowlisted host.' },
+  { id: 'supabase', name: 'Supabase', publisher: 'PostgreSQL-compatible', category: 'databases', status: 'planned', description: 'A hosted Postgres you already run.', reason: 'Planned: it will reuse the PostgreSQL connector.' },
   { id: 'mysql', name: 'MySQL', publisher: 'Read-only SQL', category: 'databases', status: 'later', description: 'Same connector interface as PostgreSQL.', reason: 'Later: after the PostgreSQL connector has passed the isolation tests.' },
   { id: 'sqlserver', name: 'SQL Server', publisher: 'Read-only SQL', category: 'databases', status: 'later', description: 'Microsoft SQL Server, read-only.', reason: 'Later: needs its own driver and a security review.' },
   { id: 'sqlite', name: 'SQLite', publisher: 'File database', category: 'databases', status: 'deferred', description: 'A database in a single file.', reason: 'Deferred: SQLite means filesystem access (paths, ATTACH, extensions), so it waits until uploads can be sandboxed.' },
-  { id: 'smartsheet', name: 'Smartsheet', publisher: 'Sheets API', category: 'other', status: 'planned', description: 'Sheets as a data source.', reason: 'Planned: needs the encrypted credential store from M5.' },
-  { id: 'telegram', name: 'Telegram bot', publisher: 'Messaging', category: 'notifications', status: 'planned', description: 'Send alerts to a chat.', reason: 'Planned: alerting is not built yet, and a bot token must be stored encrypted (M5).' },
-  { id: 'webhook', name: 'Outgoing webhook', publisher: 'HTTP', category: 'notifications', status: 'planned', description: 'Post alert events to a URL you control.', reason: 'Planned: needs the same host allowlist and SSRF protection as databases (M5).' },
+  { id: 'smartsheet', name: 'Smartsheet', publisher: 'Sheets API', category: 'other', status: 'planned', description: 'Sheets as a data source.', reason: 'Planned: needs a Smartsheet connector.' },
+  { id: 'telegram', name: 'Telegram bot', publisher: 'Messaging', category: 'notifications', status: 'planned', description: 'Send alerts to a chat.', reason: 'Planned: alerting is not built yet, and a bot token must be stored encrypted.' },
+  { id: 'webhook', name: 'Outgoing webhook', publisher: 'HTTP', category: 'notifications', status: 'planned', description: 'Post alert events to a URL you control.', reason: 'Planned: needs the same host allowlist and SSRF protection as databases.' },
   { id: 'rest', name: 'REST / JSON API', publisher: 'HTTP', category: 'other', status: 'later', description: 'Read JSON from an HTTP endpoint.', reason: 'Later: outgoing HTTP needs the SSRF-hardened connector first.' },
   { id: 'csv', name: 'CSV upload', publisher: 'File upload', category: 'other', status: 'later', description: 'Upload a CSV and query it.', reason: 'Later: needs sandboxed file storage and size limits.' },
   { id: 'wialon', name: 'Wialon', publisher: 'Fleet telematics', category: 'logistics', status: 'later', description: 'Vehicle positions and events.', reason: 'Later: needs an API credential and a dataset design.' },

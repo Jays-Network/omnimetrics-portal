@@ -8,7 +8,7 @@ export const INTEGRATION_KINDS = [
   { id: 'mysql', label: 'MySQL', available: false, note: 'Later' },
   { id: 'sqlite', label: 'SQLite', available: false, note: 'Deferred', reason: 'SQLite means filesystem access (paths, ATTACH, extensions), so it waits until uploads can be sandboxed.' },
 ] as const
-export const SSL_MODES = ['require', 'verify-full', 'disable'] as const
+export const SSL_MODES = ['require', 'verify-ca', 'verify-full', 'disable'] as const
 
 export interface IntegrationRow {
   id: string
@@ -42,8 +42,10 @@ export const IntegrationInputSchema = z.object({
   database: z.string().trim().min(1).max(63).regex(/^[A-Za-z0-9_\-]+$/, 'Letters, digits, _ and - only'),
   relations: z.array(z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9_.]+$/, 'Letters, digits, _ and . only')).max(50),
   sslMode: z.enum(SSL_MODES),
-  /** Empty or absent on edit = keep the stored credentials. Never echoed back. */
+  /** The password. Empty or absent on edit = keep the stored credentials. Never echoed back. */
   credentials: z.string().max(500).optional(),
+  /** The database user, part of the same write-only credential: sent with the password, never returned. */
+  username: z.string().max(63).optional(),
 }).strict()
 export type IntegrationInput = z.infer<typeof IntegrationInputSchema>
 

@@ -1,6 +1,7 @@
 -- 011_seed_managed_sources.sql.example
--- Seeds the allowed host localhost:5432 and one MANAGED integration per organisation: the
--- read-only connection the portal itself uses for that org's tracking table. No credential
+-- Seeds, IN THE PORTAL DATABASE, the allowed host localhost:5432 and one MANAGED integration per
+-- organisation: the read-only connection to that org's tracking table in the external database
+-- jaysnet_data (source_db). Optional: -v source_db=<database>   (default jaysnet_data). No credential
 -- is stored: credential_source = 'env:DATABASE_URL_READONLY_<ORG>' names an environment variable
 -- that the app reads at connect time (the URL of portal_reader_wr / portal_reader_adars, 004).
 --
@@ -10,13 +11,13 @@
 --         (loopback to the same host), status active, cred_* columns NULL.
 --   host: global row (org_id NULL), localhost ports 5432-5432.
 --
--- RUN AS:  postgres (superuser), NOT jaysnet_admin. After 007 (tables) and, normally, after 010.
+-- RUN AS:  postgres (superuser), NOT portal_owner. After 007 (tables) and, normally, after 010.
 --   WHY postgres: after 010 an env: integration can be created, changed or deleted only by the
 --   platform role (restrictive policies), the platform role has no grant on app_integrations,
---   and the owner jaysnet_admin is subject to FORCE ROW LEVEL SECURITY and is not the platform
+--   and the owner portal_owner is subject to FORCE ROW LEVEL SECURITY and is not the platform
 --   role. A superuser bypasses RLS, so this is the one place where these rows are made. The file
 --   refuses to run as a role that does not bypass RLS.
---   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.sql.example
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f db/migrations/011_seed_managed_sources.sql.example
 --   (holds no secret, so the .example may be run directly.)
 -- The throwaway database too (it makes the env: smoke tests runnable):
 --   sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -f db/migrations/011_seed_managed_sources.sql.example
@@ -41,7 +42,15 @@
 --   As portal_app inside an org context the rows are listable but UPDATE/DELETE touch 0 rows (smoke tests 535-538).
 -- Rollback: 011_seed_managed_sources.down.sql.example
 
+\if :{?source_db}
+\else
+    \set source_db jaysnet_data
+\endif
+
 BEGIN;
+
+-- psql variables do not expand inside $$: hand the name to the block as a transaction-local setting.
+SELECT set_config('app.migr_source_db', :'source_db', true);
 
 DO $$
 BEGIN
@@ -64,7 +73,7 @@ BEGIN
 
     INSERT INTO app_integrations
            (org_id, kind, name, host, port, database, ssl_mode, relation_allowlist, credential_source, status)
-    SELECT o.id, 'postgres', v.name, 'localhost', 5432, 'jaysnet_data', 'disable', v.relations, v.src, 'active'
+    SELECT o.id, 'postgres', v.name, 'localhost', 5432, current_setting('app.migr_source_db'), 'disable', v.relations, v.src, 'active'
       FROM (VALUES
               ('worldrisk', 'WorldRisk tracking (managed)', 'env:DATABASE_URL_READONLY_WR',    ARRAY['worldrisk_tracking']::text[]),
               ('adars',     'ADARS tracking (managed)',     'env:DATABASE_URL_READONLY_ADARS', ARRAY['adars_tracking']::text[])

@@ -7,7 +7,11 @@ React 19, TypeScript, `postgres` client with raw SQL (no ORM), jose JWT + bcrypt
 
 ## Environment
 Portal port is 3002. Port 3001 belongs to OmniOrchestrator and stays separate; never touch it.
-Ubuntu 24.04 LXC, PostgreSQL 18 on localhost:5432, DB `jaysnet_data`. Dashboards read via `portal_reader` (Grafana keeps `grafana_reader`); only app_* tables write via `jaysnet_admin`. Grafana stays on :3000 until parity. Node 22 + pnpm via fnm for user `omni`.
+Ubuntu 24.04 LXC, PostgreSQL 18 on localhost:5432. The portal's own database is `omnimetrics_portal` (all app_* tables; owner `portal_owner`, app logins `portal_app` / `portal_platform`). `jaysnet_data` is an external source: read through integrations with `portal_reader_wr` / `portal_reader_adars` (Grafana keeps `grafana_reader`). Grafana stays on :3000 until parity. Node 22 + pnpm via fnm for user `omni`.
+
+## Data sources (Jay's ruling, 2026-11-27)
+`jaysnet_data` is an EXTERNAL data source, like any client's database. The portal only READS from it, only through integrations (managed env: sources or stored credentials). The portal's own tables (all app_* tables) live in a SEPARATE database. Nothing in the portal is built around `jaysnet_data`. The only objects we ever create in `jaysnet_data` are the read-only reader roles and their SELECT grants (migration 004).
+Stored integrations may never target this server, link-local addresses or the portal database's host; only managed rows may (DECISIONS P3).
 
 ## Hard rules
 - NEVER write to worldrisk_tracking or adars_tracking. Portal is read-only on tracking data.

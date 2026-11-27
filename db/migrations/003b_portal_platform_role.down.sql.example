@@ -1,14 +1,19 @@
 -- 003b_portal_platform_role.down.sql.example
 -- Rollback of 003b. RUN AS: postgres. Roll back 010 FIRST (it holds the table grants; DROP ROLE
 -- fails while any privilege remains), and stop anything connected as portal_platform.
---   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f <this file, copied without .example>
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f <this file, copied without .example>
 --
 -- CHECK AFTER: SELECT rolname FROM pg_roles WHERE rolname = 'portal_platform';   -- 0 rows
+
+\if :{?portal_db}
+\else
+    \set portal_db omnimetrics_portal
+\endif
 
 BEGIN;
 
 REVOKE USAGE ON SCHEMA public FROM portal_platform;
-REVOKE CONNECT ON DATABASE jaysnet_data FROM portal_platform;
+REVOKE CONNECT ON DATABASE :"portal_db" FROM portal_platform;
 DROP ROLE portal_platform;     -- role-level settings are removed with the role
 
 COMMIT;

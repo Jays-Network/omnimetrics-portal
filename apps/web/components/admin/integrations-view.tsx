@@ -10,11 +10,14 @@ import { cn } from '@/lib/utils'
 import { Drawer, Field, MockBanner, Pill, SCROLL, Status, api, btnCls, dangerCls, inputCls, primaryCls, useBusy } from './ui'
 
 interface Data { rows: IntegrationRow[]; hosts: AllowedHost[]; audit: AuditEntry[]; canManageHosts: boolean }
-interface Draft { id?: string; name: string; kind: 'postgres'; host: string; port: string; database: string; relations: string; sslMode: (typeof SSL_MODES)[number]; credentials: string; replacing: boolean; saved: IntegrationRow | null }
+interface Draft { id?: string; name: string; kind: 'postgres'; host: string; port: string; database: string; relations: string; sslMode: (typeof SSL_MODES)[number]; username: string; credentials: string; replacing: boolean; saved: IntegrationRow | null }
 type Msg = { text: string; error?: boolean } | null
 
-const blank = (hosts: AllowedHost[]): Draft => ({ name: '', kind: 'postgres', host: hosts[0]?.host ?? '', port: String(hosts[0]?.portMin ?? 5432), database: '', relations: '', sslMode: 'verify-full', credentials: '', replacing: true, saved: null })
-const fromRow = (r: IntegrationRow): Draft => ({ id: r.id, name: r.name, kind: r.kind, host: r.host, port: String(r.port), database: r.database, relations: r.relations.join(', '), sslMode: r.sslMode, credentials: '', replacing: !r.hasCredentials, saved: r })
+const blank = (hosts: AllowedHost[]): Draft => {
+  const first = hosts.find((h) => h.host !== 'localhost') ?? hosts[0] // localhost is only for managed sources
+  return { name: '', kind: 'postgres', host: first?.host ?? '', port: String(first?.portMin ?? 5432), database: '', relations: '', sslMode: 'verify-full', username: '', credentials: '', replacing: true, saved: null }
+}
+const fromRow = (r: IntegrationRow): Draft => ({ id: r.id, name: r.name, kind: r.kind, host: r.host, port: String(r.port), database: r.database, relations: r.relations.join(', '), sslMode: r.sslMode, username: '', credentials: '', replacing: !r.hasCredentials, saved: r })
 const BANNER_KEY = 'omni.integrations.securityBannerDismissed'
 
 /** Neutral icon tile, tinted by category. No brand logos. */
@@ -57,7 +60,7 @@ export function IntegrationsView({ orgSlug, orgName }: { orgSlug: string; orgNam
 
   const test = (id: string) => run(async () => {
     const r = await api<{ row: IntegrationRow }>(base, 'POST', { op: 'test', id })
-    setMsg(r.ok ? { text: r.data.row.lastTest?.ok ? 'Connection test passed (mock).' : 'Connection test failed (mock).', error: !r.data.row.lastTest?.ok } : { text: r.error, error: true })
+    setMsg(r.ok ? { text: r.data.row.lastTest?.ok ? 'Connection test passed.' : 'Connection test failed.', error: !r.data.row.lastTest?.ok } : { text: r.error, error: true })
     await load()
   })
   const remove = (r: IntegrationRow) => run(async () => {
@@ -69,7 +72,7 @@ export function IntegrationsView({ orgSlug, orgName }: { orgSlug: string; orgNam
   })
   const save = () => run(async () => {
     if (!draft) return
-    const r = await api<{ row: IntegrationRow }>(base, 'POST', { op: 'save', input: { id: draft.id, name: draft.name, kind: draft.kind, host: draft.host, port: Number(draft.port), database: draft.database, relations: draft.relations.split(/[\s,]+/).filter(Boolean), sslMode: draft.sslMode, credentials: draft.credentials || undefined } })
+    const r = await api<{ row: IntegrationRow }>(base, 'POST', { op: 'save', input: { id: draft.id, name: draft.name, kind: draft.kind, host: draft.host, port: Number(draft.port), database: draft.database, relations: draft.relations.split(/[\s,]+/).filter(Boolean), sslMode: draft.sslMode, credentials: draft.credentials || undefined, username: draft.username || undefined } })
     if (!r.ok) { setDrawerMsg({ text: r.error, error: true }); return }
     setDraft(null); setDrawerMsg(null); setMsg({ text: `Saved ${r.data.row.name}.` }); await load()
   })
@@ -210,7 +213,7 @@ export function IntegrationsView({ orgSlug, orgName }: { orgSlug: string; orgNam
             <dt className="text-brand-text-muted">Allowed</dt><dd>{open.relations.join(', ') || 'None yet'}</dd>
             <dt className="text-brand-text-muted">SSL mode</dt><dd>{open.sslMode}</dd>
             <dt className="text-brand-text-muted">Used by</dt><dd>{open.usedBy} dashboard{open.usedBy === 1 ? '' : 's'}</dd>
-            <dt className="text-brand-text-muted">Credentials</dt><dd>{open.managed ? 'No stored secret. Read-only role from the server environment.' : open.hasCredentials ? `Saved, key ${open.keyId}, rotated ${open.rotatedAt ? fmt.date(open.rotatedAt) : 'never'}` : 'None'}</dd>
+            <dt className="text-brand-text-muted">Credentials</dt><dd>{open.managed ? 'No stored secret. Read-only role from the server environment.' : open.hasCredentials ? `Saved${open.keyId ? `, key ${open.keyId}` : ''}, rotated ${open.rotatedAt ? fmt.date(open.rotatedAt) : 'never'}` : 'None'}</dd>
             <dt className="text-brand-text-muted">Last test</dt><dd>{open.lastTest ? `${open.lastTest.ok ? 'Passed' : 'Failed'}, ${fmt.dateTime(open.lastTest.at)}. ${open.lastTest.message}` : 'Never tested'}</dd>
           </dl>
           <h3 className="pt-1 text-xs font-medium text-brand-text-muted">Recent activity</h3>
@@ -240,7 +243,7 @@ export function IntegrationsView({ orgSlug, orgName }: { orgSlug: string; orgNam
               {INTEGRATION_KINDS.map((k) => <option key={k.id} value={k.id} disabled={!k.available}>{k.label}{k.available ? '' : ` (${'note' in k ? k.note : ''})`}</option>)}
             </select>
           </Field>
-          <Field id="i-host" label="Host" hint="Chosen from the list the director allows. It cannot be typed.">
+          <Field id="i-host" label="Host" hint="Chosen from the list the director allows. It cannot be typed. This server itself is only for managed sources.">
             <select id="i-host" className={inputCls} value={draft.host} onChange={(e) => { const h = data?.hosts.find((x) => x.host === e.target.value); setDraft((d) => (d ? { ...d, host: e.target.value, port: String(h?.portMin ?? d.port) } : d)) }}>
               {(data?.hosts ?? []).map((h) => <option key={h.id} value={h.host}>{h.host} (ports {h.portMin === h.portMax ? h.portMin : `${h.portMin} to ${h.portMax}`})</option>)}
             </select>
@@ -251,13 +254,17 @@ export function IntegrationsView({ orgSlug, orgName }: { orgSlug: string; orgNam
           <Field id="i-ssl" label="SSL mode"><select id="i-ssl" className={inputCls} value={draft.sslMode} onChange={(e) => set('sslMode', e.target.value as Draft['sslMode'])}>{SSL_MODES.map((m) => <option key={m}>{m}</option>)}</select></Field>
           {draft.saved?.hasCredentials && !draft.replacing ? (
             <div className="rounded-md border border-brand-border p-2.5 text-sm">
-              <p>Credentials saved, key {draft.saved.keyId}, rotated {draft.saved.rotatedAt ? fmt.date(draft.saved.rotatedAt) : 'never'}.</p>
+              <p>Credentials saved{draft.saved.keyId ? `, key ${draft.saved.keyId}` : ''}, rotated {draft.saved.rotatedAt ? fmt.date(draft.saved.rotatedAt) : 'never'}.</p>
+              <p className="mt-1 text-xs text-brand-text-muted">Changing the host, port, database or SSL mode needs them entered again.</p>
               <button type="button" className={`${btnCls} mt-2`} onClick={() => set('replacing', true)}>Replace credentials</button>
             </div>
           ) : (
-            <Field id="i-cred" label={draft.saved?.hasCredentials ? 'New credentials' : 'Credentials'} hint={draft.saved?.hasCredentials ? 'Leave empty to keep the saved credentials. Saved credentials are never shown again.' : 'Write-only: after saving they are never shown again.'}>
-              <input id="i-cred" type="password" autoComplete="new-password" spellCheck={false} className={inputCls} value={draft.credentials} onChange={(e) => set('credentials', e.target.value)} />
-            </Field>
+            <>
+              <Field id="i-user" label="Database user" hint="A read-only user. Saved with the password and never shown again."><input id="i-user" className={inputCls} autoComplete="off" spellCheck={false} maxLength={63} value={draft.username} onChange={(e) => set('username', e.target.value)} /></Field>
+              <Field id="i-cred" label={draft.saved?.hasCredentials ? 'New credentials' : 'Credentials'} hint={draft.saved?.hasCredentials ? 'Leave both empty to keep the saved credentials (not possible when the host, port, database or SSL mode changes). Saved credentials are never shown again.' : 'The password. Write-only: after saving it is never shown again.'}>
+                <input id="i-cred" type="password" autoComplete="new-password" spellCheck={false} className={inputCls} value={draft.credentials} onChange={(e) => set('credentials', e.target.value)} />
+              </Field>
+            </>
           )}
           <Status msg={drawerMsg} />
         </Drawer>

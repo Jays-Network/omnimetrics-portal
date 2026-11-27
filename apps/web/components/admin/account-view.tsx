@@ -7,20 +7,21 @@ import { GlassPanel } from '@/components/fx/glass-panel'
 import type { SessionRow } from '@/lib/admin/types'
 import { Field, MockBanner, PageFrame, Pill, Status, api, dangerCls, inputCls, primaryCls, useBusy } from './ui'
 
-/** My account: change password (mock), my sessions, two-factor (planned). Always the signed-in person. */
+/** My account: change password, my sessions, two-factor (planned). Always the signed-in person. */
 export function AccountView({ username, email, isDirector }: { username: string; email: string; isDirector: boolean }) {
   const fmt = useFormat()
   const [sessions, setSessions] = useState<SessionRow[]>([])
+  const [unavailable, setUnavailable] = useState(false)
   const [cur, setCur] = useState(''); const [next, setNext] = useState('')
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
   const [busy, run] = useBusy()
-  const load = useCallback(async () => { const r = await api<{ sessions: SessionRow[] }>('/api/portal/account', 'GET'); if (r.ok) setSessions(r.data.sessions) }, [])
+  const load = useCallback(async () => { const r = await api<{ sessions: SessionRow[] }>('/api/portal/account', 'GET'); if (r.ok) setSessions(r.data.sessions); setUnavailable(!r.ok) }, [])
   useEffect(() => { void load() }, [load])
   const change = () => run(async () => {
     const r = await api<{ message: string }>('/api/portal/account', 'POST', { op: 'password', current: cur, next })
     setMsg(r.ok ? { text: r.data.message } : { text: r.error, error: true }); if (r.ok) { setCur(''); setNext('') }
   })
-  const revoke = (s: SessionRow) => run(async () => { const r = await api('/api/portal/account', 'POST', { op: 'revoke', sessionId: s.id }); setMsg(r.ok ? { text: 'Session revoked (mock).' } : { text: r.error, error: true }); await load() })
+  const revoke = (s: SessionRow) => run(async () => { const r = await api('/api/portal/account', 'POST', { op: 'revoke', sessionId: s.id }); setMsg(r.ok ? { text: 'Session revoked.' } : { text: r.error, error: true }); await load() })
   return (
     <PageFrame title="My account" description="Your own login details and security.">
       <MockBanner>Mock: nothing is stored or sent. Do not enter your real password.</MockBanner>
@@ -37,6 +38,7 @@ export function AccountView({ username, email, isDirector }: { username: string;
         </GlassPanel>
         <GlassPanel tone="data" className="min-h-0 p-4 lg:col-span-1">
           <h2 className="mb-2 font-display text-sm font-semibold">My sessions</h2>
+          {unavailable ? <p className="text-sm text-brand-text-muted">The session list is not available.</p> : null}
           <ul className="space-y-2">
             {sessions.map((s) => (
               <li key={s.id} className="flex list-none items-start justify-between gap-2 rounded-md border border-brand-border p-2 text-xs">

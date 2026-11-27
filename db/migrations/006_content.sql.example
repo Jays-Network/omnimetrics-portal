@@ -2,8 +2,8 @@
 -- Content tree (folders and dashboards), append-only dashboard versions, access grants.
 -- PLAN_BUILDER sections 2, 3 and A.
 --
--- RUN AS:  jaysnet_admin.   After 005.
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/006_content.sql
+-- RUN AS:  portal_owner, in omnimetrics_portal. After 005.
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/006_content.sql
 -- Rollback: 006_content.down.sql.example
 --
 -- Creates: app_content_nodes, app_dashboard_versions, app_grants + 3 trigger functions.
@@ -39,7 +39,7 @@
 --     its first version can be created in one transaction: insert node, insert version,
 --     update node.current_version).
 --
--- CHECKS AFTER RUNNING (as jaysnet_admin; throwaway data inside a transaction you ROLLBACK):
+-- CHECKS AFTER RUNNING (as portal_owner; throwaway data inside a transaction you ROLLBACK):
 --   \dt app_*      -- + app_content_nodes, app_dashboard_versions, app_grants
 --   SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint
 --     WHERE conrelid IN ('app_content_nodes'::regclass,'app_dashboard_versions'::regclass,'app_grants'::regclass) ORDER BY 1;

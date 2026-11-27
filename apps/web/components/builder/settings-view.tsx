@@ -1,5 +1,6 @@
 'use client'
 
+import { usePortalMode } from '@/components/admin/portal-mode'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { Plus, Trash2, Undo2 } from 'lucide-react'
@@ -430,21 +431,22 @@ function LinksTab({ s, tryApply, orgSlug, nodeId }: Pick<TabProps, 's' | 'tryApp
   )
 }
 
-/* ------------------------------------------------------------------ Permissions (mock) */
+/* ------------------------------------------------------------------ Permissions */
 
 function PermissionsTab({ orgSlug, nodeId, isAdmin }: { orgSlug: string; nodeId: string; isAdmin: boolean }) {
   const url = `/api/portal/o/${encodeURIComponent(orgSlug)}/dashboards/${encodeURIComponent(nodeId)}/grants`
+  const mode = usePortalMode()
   const [rows, setRows] = useState<GrantRow[] | null>(null)
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
   useEffect(() => { void api<{ grants: GrantRow[] }>(url, 'GET').then((r) => (r.ok ? setRows(r.data.grants) : setMsg({ text: r.error, error: true }))) }, [url])
   const upd = (i: number, patch: Partial<GrantRow>) => setRows((r) => r!.map((x, k) => (k === i ? { ...x, ...patch } : x)))
   const save = async () => {
     const r = await api<{ grants: GrantRow[] }>(url, 'PUT', { grants: rows })
-    if (r.ok) { setRows(r.data.grants); setMsg({ text: 'Grants saved (mock).' }) } else setMsg({ text: r.error, error: true })
+    if (r.ok) { setRows(r.data.grants); setMsg({ text: 'Grants saved.' }) } else setMsg({ text: r.error, error: true })
   }
   return (
     <section aria-label="Permissions" className="space-y-3">
-      <p className="rounded-md border border-brand-border bg-brand-surface p-2 text-xs text-brand-text-muted">Mock only: these grants live in memory and do not protect anything. Real grants, enforced on the server for every request, arrive in M5.</p>
+      <p className="rounded-md border border-brand-border bg-brand-surface p-2 text-xs text-brand-text-muted">{mode === 'mock' ? 'Mock only: these grants live in memory and do not protect anything.' : 'These grants are enforced on the server for every request.'}</p>
       <p role={msg?.error ? 'alert' : 'status'} className={cn('min-h-4 text-xs', msg?.error ? 'text-brand-danger' : 'text-brand-text-muted')}>{msg?.text}</p>
       {rows === null ? <p className="text-sm text-brand-text-muted">Loading…</p> : (
         <table className="w-full text-left text-sm">

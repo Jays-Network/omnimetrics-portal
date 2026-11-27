@@ -74,6 +74,49 @@ export async function withAttemptLimit<T>(
   return { limited: false, result }
 }
 
+export const MAX_TESTS_PER_MINUTE = 10
+export const MAX_ORG_TESTS_PER_MINUTE = 20
+const TEST_WINDOW_MS = 60_000
+
+const globalForTests = globalThis as unknown as { __omniIntegrationTests?: Map<string, number[]> }
+const tests: Map<string, number[]> = (globalForTests.__omniIntegrationTests ??= new Map())
+
+export function integrationTestKey(orgId: string, integrationId: string): string {
+  return `integration.test\n${orgId}\n${integrationId}`
+}
+
+/** One organisation across all its integrations, so adding integrations does not add tests. */
+export function orgTestLimit(orgId: string): { key: string; max: number } {
+  return { key: `integration.test.org\n${orgId}`, max: MAX_ORG_TESTS_PER_MINUTE }
+}
+
+/**
+ * Same shape as withAttemptLimit, but EVERY run counts (successful ones too): at most 10 in any minute per key,
+ * and at most `shared.max` per minute for the shared key. A refused call takes no slot in either. The slots are
+ * taken before `run`, so parallel calls cannot exceed a limit. `shared: true` in a refusal: the shared one is full.
+ */
+export async function withRateLimit<T>(
+  key: string,
+  run: () => Promise<T>,
+  now: () => number = Date.now,
+  shared?: { key: string; max: number },
+): Promise<{ limited: true; retryAfter: number; shared?: true } | { limited: false; result: T }> {
+  const t = now()
+  const limits = [{ key, max: MAX_TESTS_PER_MINUTE }, ...(shared ? [shared] : [])].map((l) => {
+    const recent = (tests.get(l.key) ?? []).filter((x) => t - x < TEST_WINDOW_MS)
+    const wait = recent.length >= l.max ? Math.max(1, Math.ceil((recent[0]! + TEST_WINDOW_MS - t) / 1000)) : 0
+    return { ...l, recent, wait }
+  })
+  const retryAfter = Math.max(...limits.map((l) => l.wait))
+  if (retryAfter > 0) {
+    for (const l of limits) tests.set(l.key, l.recent)
+    return { limited: true, retryAfter, ...(limits[1]?.wait ? { shared: true as const } : {}) }
+  }
+  if (tests.size >= MAX_TRACKED_KEYS) tests.clear()
+  for (const l of limits) tests.set(l.key, [...l.recent, t])
+  return { limited: false, result: await run() }
+}
+
 /**
  * Client IP as set by the reverse proxy (nginx sets X-Real-IP). Without a
  * trusted proxy in front these headers are client-controlled.

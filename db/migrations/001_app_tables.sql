@@ -1,11 +1,11 @@
 -- 001_app_tables.sql
 -- OmniMetrics Portal: application tables (users, project access, audit log).
 --
--- Run ONCE against jaysnet_data as jaysnet_admin:
---   psql -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/001_app_tables.sql
+-- Run ONCE against the PORTAL's own database (portal_db, default omnimetrics_portal) as its owner
+-- (owner_role, default portal_owner):
+--   psql -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/001_app_tables.sql
 --
--- Creates app_* tables only. Does NOT touch worldrisk_tracking, adars_tracking
--- or any other existing table.
+-- Creates app_* tables only. jaysnet_data is an external data source and is not touched.
 
 BEGIN;
 

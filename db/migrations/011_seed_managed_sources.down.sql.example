@@ -1,6 +1,6 @@
 -- 011_seed_managed_sources.down.sql.example
 -- Rollback of 011. RUN AS: postgres (RLS bypass is needed to delete env: rows).
---   sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f <this file, copied without .example>
+--   sudo -u postgres psql -v ON_ERROR_STOP=1 -d omnimetrics_portal -f <this file, copied without .example>
 -- Roll this back FIRST (before 010 and below).
 --
 -- Deletes exactly the two managed integrations (matched on org slug, name AND env: source, so a

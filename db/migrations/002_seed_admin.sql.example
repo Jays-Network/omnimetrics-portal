@@ -7,10 +7,10 @@
 --      node scripts/hash-password.mjs
 --
 -- 2. Copy this file to db/migrations/002_seed_admin.sql (that name is
---    git-ignored), replace the placeholders, and run it as jaysnet_admin
+--    git-ignored), replace the placeholders, and run it as portal_owner
 --    (or portal_app, once 003 has been applied):
 --
---      psql -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/002_seed_admin.sql
+--      psql -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/002_seed_admin.sql
 --
 --    Bcrypt hashes contain '$' characters; keep the value inside the single
 --    quotes below and run the file with -f (not inline with -c in a shell).

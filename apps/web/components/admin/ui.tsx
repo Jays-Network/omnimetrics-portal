@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { GlassPanel } from '@/components/fx/glass-panel'
 import { cn } from '@/lib/utils'
+import { usePortalMode } from './portal-mode'
 
 // Small shared pieces for the M4 screens. Tokens only; effects follow data-fx through GlassPanel.
 export const inputCls = 'h-9 w-full rounded-md border border-brand-border-strong bg-brand-primary px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent disabled:opacity-60'
@@ -24,7 +25,9 @@ export async function api<T = Record<string, unknown>>(url: string, method: 'GET
   }
 }
 
+/** Shown on the mock only: nothing it says is true on pg. */
 export function MockBanner({ children }: { children?: ReactNode }) {
+  if (usePortalMode() === 'pg') return null
   return (
     <p role="note" className="mb-2 shrink-0 rounded-md border border-[var(--chart-2)] px-3 py-1.5 text-xs text-[var(--chart-2)]">
       {children ?? 'Mock: nothing is stored or sent. Do not enter real credentials.'}

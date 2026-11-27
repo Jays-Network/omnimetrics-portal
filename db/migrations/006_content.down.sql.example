@@ -1,5 +1,5 @@
 -- 006_content.down.sql.example
--- Rollback of 006. RUN AS: jaysnet_admin. Roll back 010, 009, 008, 007 first
+-- Rollback of 006. RUN AS: portal_owner, in omnimetrics_portal. Roll back 010, 009, 008, 007 first
 -- (007+ do not reference these tables, but 010 holds policies and grants on them).
 --
 -- DATA LOSS: drops every folder, dashboard, version and grant. Pre-go-live use only;

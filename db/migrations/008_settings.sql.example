@@ -1,8 +1,8 @@
 -- 008_settings.sql.example
 -- app_settings: system, organisation and user scoped settings (PLAN_BUILDER section E).
 --
--- RUN AS:  jaysnet_admin.   After 007.
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/008_settings.sql
+-- RUN AS:  portal_owner, in omnimetrics_portal. After 007.
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/008_settings.sql
 -- Rollback: 008_settings.down.sql.example
 --
 -- Resolution (app side): user > organisation > system > code constant.

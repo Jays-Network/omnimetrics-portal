@@ -110,3 +110,39 @@ Made while building; Jay to confirm or overrule before the cut-over.
 - **C7.** The one-time password panel closes on Done or Escape, not on a click outside; leaving the page drops it. Where the clipboard API is missing (plain http) Copy selects the field and tries the older copy command, and says so if that fails.
 - **C8.** The test database rebuild sets new random passwords every run and writes them to `apps/web/.env.test`; `portal_test_owner` gets none.
 - **C9.** The checklist no longer asks to re-run 009 as an idempotency check: it is run once.
+
+## M5 stage 3 decisions (2026-11-27; integrations only, no tracking number changes)
+Made while building; Jay to confirm or overrule before the cut-over.
+- **I1.** `connectors.ts` defined no credential fields. A stored credential is now `{username, password}` (`StoredCredentialSchema`). The input keeps `credentials` (the password) and gains an optional `username`; the form has a "Database user" field.
+- **I2.** AAD is `omni:integration:v1:<orgId>:<integrationId>` (as specified for this stage). PLAN_BUILDER section 5 and the comment in 007 still say `org_id|integration_id|key_id` and `lib/integrations/secrets.ts`; the code is `lib/integrations/crypto.ts`.
+- **I3.** No column holds the last connection test (007): it is read from the newest `integration.test` audit row. Editing a connection does not reset it (as the mock).
+- **I4.** Changing host, port or database needs the credential again, in the mock too. Changing only the SSL mode does not (open question).
+- **I5.** Every save is checked against the allowed hosts, not only creates and moves (as the mock). Hosts with `:`, `,`, `/` or spaces are never connected to (so no IPv6 literals).
+- **I6.** A managed (`env:`) source takes only user and password from its variable; host, port, database and SSL mode come from the row, which is what the allowlist covers.
+- **I7.** A disabled row tests as `not_allowed`; a row without a credential, or one that cannot be decrypted, as `other`.
+- **I8.** Connection tests: 10 per minute per organisation and integration in pg, every attempt counted. The mock keeps its 5 per minute per person.
+- **I9.** Builders and viewers get `not_found` from every pg function; the mock still answers `forbidden` (routes answer 404 either way).
+- **I10.** pg never returns a key id; the screen shows it only when one is sent. `usedBy` is 0 until datasets exist.
+- **I11.** Delete removes the datasets over the integration (007 cascade), matching the mock deleting a connection that is in use.
+- **I12.** Removing an allowed host is refused while any organisation has a stored integration on it. The platform role cannot read `app_integrations`, so the director's check counts organisation by organisation over `portal_app` and uses only the number.
+- **I13.** Hosts added through the app are global and stored in lower case.
+- **I14.** Audit detail keeps yes/no values under secret-looking names (`credentialReplaced`); strings and objects under them are still redacted.
+- **I15.** PLAN_BUILDER's DNS pinning and private-range rejection are NOT built: the exact allowlisted host is the control.
+
+## Portal database (Jay's ruling, 2026-11-27)
+**`jaysnet_data` is an EXTERNAL data source, like any client's database. The portal only READS from it, only through integrations (managed `env:` sources or stored credentials). The portal's own tables (all `app_*` tables) live in a SEPARATE database. Nothing in the portal is built around `jaysnet_data`. The only objects we ever create in `jaysnet_data` are the read-only reader roles and their SELECT grants (migration 004).**
+- Supersedes every earlier statement that the portal's tables are in `jaysnet_data` or that `jaysnet_admin` owns them (CLAUDE.md, README, the architecture brief, CONTEXT section 7, PLAN_BUILDER section 5 "Local source" and its risk list).
+- Names: database `omnimetrics_portal`, owner `portal_owner` (migration headers; psql variables `portal_db`, `source_db`).
+- The `app_*` tables created in `jaysnet_data` in Phase 1 stay there untouched (rollback path) until a separate, explicit drop.
+- No number changes. Not applied yet: M5_APPLY_CHECKLIST section 0A.
+
+## M5 stage 3b decisions (2026-11-27; no tracking number changes)
+Made while building; Jay to confirm or overrule before the cut-over.
+- **P1.** Migrations are re-pointed only (proved by `db/test/check_migrations_mechanical.sh.example`). No executable statement names the owner role, so `owner_role` appears in headers and commands only, not as a psql variable in SQL.
+- **P2.** `portal_app` exists already (roles are cluster-wide), so 003 cannot run unchanged on the new database; the checklist gives its other statements by hand (same for 003b).
+- **P3.** Stored integrations (create, update, test) never target loopback, unspecified, link-local, `fd00:ec2::254`, or the host of `DATABASE_URL` / `DATABASE_URL_PLATFORM`, on any port or database. Added beyond the list asked for: this server's own network addresses (otherwise its LAN IP reaches the same local database) and the IPv6 metadata address. Managed rows are exempt. Only the app enforces this.
+- **P4.** At test time the host is resolved once; any forbidden address refuses; the connection goes to the checked address (IPv4 first, no fallback to another) with the TLS server name set to the configured host. If the portal database's host cannot be resolved, stored tests are refused. Supersedes the "NOT built" part of I15 for DNS pinning; other private ranges are still allowed when the host is on the allowlist.
+- **P5.** Changing host, port, database or SSL mode needs the credential again (pg and mock). Supersedes I4.
+- **P6.** Tests: 10 per minute per integration and 20 per minute per organisation (pg). A refused test uses no quota. The mock keeps its 5 per minute per person. Extends I8.
+- **P7.** `verify-ca` is offered in the form. Screens hide mock-only wording on pg.
+- **P8. OPEN.** The Organisations screen shows 0 integrations (and dashboards) in pg: the platform role has no grant on them (010). Needs a grant decision; unchanged.

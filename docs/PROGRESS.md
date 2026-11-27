@@ -100,3 +100,18 @@ Rulings recorded: R7 (SQL terminal is director-only; CLAUDE.md hard rule updated
   - `db/test/rebuild_portal_test.sh.example` now applies 012, sets passwords, writes `.env.test`, verifies logins. 012 checks added to the smoke test. **Neither was run by Claude.**
   - Tests: typecheck clean, `pnpm test` 331 green (was 305). `pnpm test:db` needs the rebuild first (012). `pnpm build` not run.
   - Open: Jay runs the rebuild, `pnpm test:db` and the smoke test; DECISIONS C1 to C9; no "sign out everywhere" button; the account, Users and Accounts screens still say "mock".
+
+
+- **M5 stage 3 (2026-11-27): integrations and allowed hosts in Postgres, credentials encrypted. Not committed.** `PORTAL_DATA` stays `mock`; production still refuses mock and pg. No new migration.
+  - Code: `lib/integrations/{crypto,allowlist,test-connection}.ts`, `lib/portal/pg/integrations.ts` (wired into the pg portal; no integrations stub left), `withRateLimit` in `lib/rate-limit.ts`, `StoredCredentialSchema` in `connectors.ts`, "Database user" field, host/port/database change needs the credential (mock too).
+  - Tests: typecheck clean, `pnpm test` 396 green (was 331), `pnpm test:db` 99 green (was 70), including one real connection to `portal_test`. `pnpm build` not run; not clicked through in a browser.
+  - Needed before use: `INTEGRATION_KEYS` (M5_APPLY_CHECKLIST section 10).
+  - Open: DECISIONS I1 to I15; SSL-mode downgrade without re-entering the credential; test limit can be multiplied by adding integrations; localhost is on the global allowlist (011).
+  - Next stage (not built): tracking reads, datasets, SQL terminal.
+
+- **M5 stage 3b (2026-11-27): the portal's own database is separate from `jaysnet_data`; stage 3 risks fixed. Not committed.** `PORTAL_DATA` stays `mock`; production still refuses mock and pg. Nothing applied to any real database.
+  - Migrations re-pointed (comments, `portal_db` / `source_db` variables); `bash db/test/check_migrations_mechanical.sh.example` proves it.
+  - Stored integrations cannot reach this server or the portal database (`lib/integrations/target-guard.ts`), tests connect to the checked address; SSL mode change needs the credential; 20 tests/min per organisation; `verify-ca` in the form; mock wording hidden on pg.
+  - Tests: typecheck clean, `pnpm test` 426 (was 396), `pnpm test:db` 103 (was 99). `pnpm build` not run; not clicked through in a browser.
+  - Jay: `sudo bash db/test/rebuild_portal_test.sh.example`, `pnpm test:db`, the smoke command (M5_APPLY_CHECKLIST section 6); then section 0A when ready. DECISIONS P1 to P8.
+

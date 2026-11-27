@@ -1,5 +1,5 @@
 -- 008_settings.down.sql.example
--- Rollback of 008. RUN AS: jaysnet_admin. Roll back 010 first.
+-- Rollback of 008. RUN AS: portal_owner, in omnimetrics_portal. Roll back 010 first.
 -- DATA LOSS: all system, organisation and user settings (the app falls back to code constants).
 -- CHECK AFTER: \dt app_settings  -- no relation
 

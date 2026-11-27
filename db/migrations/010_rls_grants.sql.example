@@ -3,8 +3,8 @@
 -- portal_platform.
 -- PLAN_BUILDER sections 3.2 (item 6) and A.
 --
--- RUN AS:  jaysnet_admin (the table owner).  After 005-009 (009 BEFORE this file).
---   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.sql
+-- RUN AS:  portal_owner (owner_role, the table owner), in the portal database omnimetrics_portal.  After 005-009 (009 BEFORE this file).
+--   psql -v ON_ERROR_STOP=1 -U portal_owner -d omnimetrics_portal -h localhost -f db/migrations/010_rls_grants.sql
 --   Optional: -v app_role=<role>        (default portal_app)
 --             -v platform_role=<role>   (default portal_platform; created by 003b, NOT by this file)
 --   The throwaway test DB passes -v app_role=portal_test_app -v platform_role=portal_test_platform.
@@ -69,8 +69,8 @@
 -- A role name other than portal_platform must be passed as -v platform_role=<name> to THIS file
 -- (it is baked into app_is_platform() at creation) and to the down file.
 --
--- HOW THE OWNER BEHAVES UNDER FORCE (jaysnet_admin owns the tables)
---   * FORCE means the owner is subject to the policies like any role. Run as jaysnet_admin
+-- HOW THE OWNER BEHAVES UNDER FORCE (portal_owner owns the tables)
+--   * FORCE means the owner is subject to the policies like any role. Run as portal_owner
 --     WITHOUT context, SELECT on a tenant table returns 0 rows and INSERT fails WITH CHECK.
 --   * The owner can still do maintenance deliberately: SELECT set_config('app.org_id','<uuid>',true)
 --     inside a transaction (what 009 does for the backfill). That keeps the "owner must opt in"
@@ -80,11 +80,11 @@
 --   * DDL (ALTER/CREATE/DROP/GRANT, adding columns, migrations 011+) is NOT affected by RLS.
 --   * Roles that DO bypass RLS: superuser (postgres) and any BYPASSRLS role. Use postgres for
 --     emergency repair and for pg_dump of app_* tables.
---   * pg_dump as jaysnet_admin now FAILS on the tenant tables ("query would be affected by
---     row-level security policy"; pg_dump runs with row_security=off). Any cron/backup that dumps
---     jaysnet_data as jaysnet_admin must switch to postgres (or a dedicated BYPASSRLS backup
---     role). vzdump (whole-container) is unaffected. Check before applying (checklist pre-flight).
---   * Grafana (grafana_reader) and the tracking tables are unaffected.
+--   * pg_dump as portal_owner FAILS on the tenant tables ("query would be affected by
+--     row-level security policy"; pg_dump runs with row_security=off). A backup of the portal
+--     database (omnimetrics_portal) must run as postgres (or a dedicated BYPASSRLS backup role).
+--     vzdump (whole-container) is unaffected.
+--   * The external database jaysnet_data (Grafana, the tracking tables) is not touched.
 --
 -- CHECKS AFTER RUNNING (the checklist has the complete set; db/test/smoke_m5.sql.example runs
 -- the behavioural tests in the throwaway database):
