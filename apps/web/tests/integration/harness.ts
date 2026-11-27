@@ -16,7 +16,7 @@ import { inAppTx, type Tx } from '@/lib/portal/pg/tx'
  */
 
 type Sql = ReturnType<typeof postgres>
-const g = globalThis as unknown as { __omniSqlApp?: unknown; __omniSqlPlatform?: unknown }
+const g = globalThis as unknown as { __omniSql?: unknown; __omniSqlApp?: unknown; __omniSqlPlatform?: unknown }
 
 export const DIRECTOR = 'itest_director'
 /** A committed login with no membership: the only kind the platform connection can link. */
@@ -100,10 +100,12 @@ export async function startWorld(): Promise<World> {
   const platform = await connect('TEST_DATABASE_URL_PLATFORM')
   const heldApp = await hold(app)
   const heldPlatform = await hold(platform)
+  g.__omniSql = heldApp.tx // getDb(): login's user load (lib/auth), same transaction as the repositories
   g.__omniSqlApp = facade(heldApp.tx)
   g.__omniSqlPlatform = facade(heldPlatform.tx)
 
   const close = async () => {
+    delete g.__omniSql
     delete g.__omniSqlApp
     delete g.__omniSqlPlatform
     await heldApp.rollback()

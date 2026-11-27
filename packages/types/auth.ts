@@ -24,4 +24,6 @@ export interface JWTPayload {
   sub: string
   iat?: number
   exp: number
+  /** app_users.token_version at signing. Only present with SESSION_VERSION=1 (migration 012). */
+  tv?: number
 }

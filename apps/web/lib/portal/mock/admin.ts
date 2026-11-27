@@ -284,7 +284,14 @@ export const account = {
     audit(null, actor, 'session.revoke', 'session', id)
     return { ok: true }
   },
-  changePassword(actor: Actor, current: string, next: string): Result<{ message: string }> {
+  /** "Sign out everywhere": own sessions only; the one in use stays. */
+  revokeSessions(actor: Actor): Result<{ message: string; tokenVersion?: number }> {
+    const key = myKey(actor)
+    db().sessions = db().sessions.filter((s) => s.userId !== key || s.current)
+    audit(null, actor, 'user.sessions_revoke', 'user', actor.id)
+    return { ok: true, message: 'Mock: your other sessions were removed from the list. No real session was ended.' }
+  },
+  changePassword(actor: Actor, current: string, next: string): Result<{ message: string; tokenVersion?: number }> {
     const problem = passwordProblem(current, next)
     if (problem) return invalid(problem)
     // Only passwords the mock generated are known here; a real person's input is never kept.

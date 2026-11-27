@@ -28,6 +28,8 @@
 --   done
 --   psql -v ON_ERROR_STOP=1 -v app_role=portal_test_app -v platform_role=portal_test_platform \
 --        -U portal_test_owner -h localhost -d portal_test -f db/migrations/010_rls_grants.sql.example
+-- Then 012 (same -v roles as 010). db/test/rebuild_portal_test.sh.example does all of this, plus 011, the
+-- passwords and apps/web/.env.test, in one command; the manual steps are for reference only.
 -- Then the behavioural smoke test, once per role (everything is rolled back; see its header):
 --   psql -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example
 --   psql -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example

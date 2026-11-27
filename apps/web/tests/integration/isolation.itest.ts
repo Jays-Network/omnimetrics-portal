@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 import path from 'node:path'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentOp } from '@omnimetrics/types'
 import * as account from '@/lib/portal/pg/account'
 import * as content from '@/lib/portal/pg/content'
@@ -201,6 +201,19 @@ const matrix: Record<string, () => Promise<void>> = {
   'account.changePassword': async () => {
     for (const ctx of actors) expect(await account.changePassword(as(ctx), 'not-the-password', 'a-long-new-password')).toMatchObject({ ok: false, code: 'invalid' })
   },
+  // Takes the session actor only: A's people can only ever end their own sessions (the snapshot covers B).
+  'account.revokeSessions': () =>
+    withSessionVersion(async () => {
+      const ids = [...actors.map((c) => c.userId), w.bAdmin.id]
+      const versions = () =>
+        w.asOrg(w.orgA.id, async (tx) => {
+          const rows = await tx<{ id: string; v: number }[]>`SELECT id, token_version AS v FROM app_users WHERE id IN ${tx(ids)}`
+          return ids.map((id) => rows.find((r) => r.id === id)!.v)
+        })
+      const before = await versions()
+      expect(await account.revokeSessions(as(actors[0]!))).toMatchObject({ ok: true })
+      expect(await versions()).toEqual(before.map((v, i) => (i === 0 ? v + 1 : v)))
+    }),
   'settings.get': async () => {
     for (const ctx of actors) {
       const r = await settings.get(ctx)
@@ -217,6 +230,16 @@ const matrix: Record<string, () => Promise<void>> = {
       expect(await settings.set(ctx, as(ctx), 'user', { dateFormat: 'DMY' })).toMatchObject({ ok: true })
     }
   },
+}
+
+/** Needs migration 012 in portal_test. */
+async function withSessionVersion<T>(fn: () => Promise<T>): Promise<T> {
+  vi.stubEnv('SESSION_VERSION', '1')
+  try {
+    return await fn()
+  } finally {
+    vi.unstubAllEnvs()
+  }
 }
 
 const modules = { account, content, dashboards, org, organisations, orgs, settings, users }
@@ -256,6 +279,7 @@ describe('no repository function returns a password hash', () => {
       'users.update': () => users.update(admin, me, member, { role: 'viewer' }),
       'account.changePassword': () => account.changePassword({ id: member, username: added.member.username }, added.oneTimePassword, 'a-long-new-password'),
       'account.resetPassword': () => account.resetPassword(admin, me, member),
+      'account.revokeSessions': () => withSessionVersion(() => account.revokeSessions({ id: member, username: added.member.username })),
       'settings.get': () => settings.get(admin),
       'settings.set': () => settings.set(admin, me, 'org', { timeFormat: '12' }),
     }

@@ -3,19 +3,22 @@ import { BCRYPT_COST, OWN_RESET, SHARED_LOGIN, WRONG_CURRENT, newOneTimePassword
 import type { Result } from '@/lib/admin/types'
 import { writeAudit } from '@/lib/audit'
 import { invalidateUserCache } from '@/lib/auth'
+import { sessionVersionEnabled } from '@/lib/session-version'
 import type { Actor } from '../mock/admin' // type only
 import { withOrg, withPlatform, withUser } from './context'
 import { assertOrgCtx, type OrgCtx } from './org'
 import { isUuid } from './tx'
 
-// Passwords. A hash is read only to verify the caller's own current password and never leaves this module.
-// Existing sessions are NOT ended by either function: that needs app_users.token_version (012).
+// Passwords and sessions. A hash is read only to verify the caller's own current password and never leaves
+// this module. With SESSION_VERSION=1 (needs 012) a change, reset or revoke bumps token_version in the same
+// transaction, which ends the sessions signed with the old one. With the flag off nothing names that column.
 
 const gone: Result<never> = { ok: false, code: 'not_found', error: 'Not found' }
 const invalid = (error: string): Result<never> => ({ ok: false, code: 'invalid', error })
 
 /** The signed-in person's own password. `actor` comes from the verified session, never from the request. */
-export async function changePassword(actor: Actor, current: string, next: string): Promise<Result<{ message: string }>> {
+/** `tokenVersion` (flag on) is for the route to re-issue this session's cookie; it is not sent to the browser. */
+export async function changePassword(actor: Actor, current: string, next: string): Promise<Result<{ message: string; tokenVersion?: number }>> {
   if (!isUuid(actor.id)) return gone
   const problem = passwordProblem(current, next)
   if (problem) return invalid(problem)
@@ -26,13 +29,36 @@ export async function changePassword(actor: Actor, current: string, next: string
   const hash = await bcrypt.hash(next, BCRYPT_COST)
   const result = await withUser(actor.id, async (tx) => {
     // The old hash in the WHERE: a concurrent change or reset wins and this one is refused.
-    const done = await tx`
+    const done = sessionVersionEnabled()
+      ? await tx<{ id: string; version?: number }[]>`
+      UPDATE app_users SET hashed_password = ${hash}, token_version = token_version + 1, updated_at = now()
+       WHERE id = ${actor.id} AND hashed_password = ${row.hash}
+      RETURNING id, token_version AS version`
+      : await tx<{ id: string; version?: number }[]>`
       UPDATE app_users SET hashed_password = ${hash}, updated_at = now()
        WHERE id = ${actor.id} AND hashed_password = ${row.hash}
       RETURNING id`
     if (!done.length) return invalid(WRONG_CURRENT)
     await writeAudit({ userId: actor.id, action: 'user.password_change', targetType: 'user', targetId: actor.id, ip: actor.ip }, tx)
-    return { ok: true as const, message: 'Password changed.' }
+    const version = done[0]!.version
+    return { ok: true as const, message: 'Password changed.', ...(version === undefined ? {} : { tokenVersion: version }) }
+  })
+  if (result.ok) invalidateUserCache(actor.id)
+  return result
+}
+
+/** "Sign out everywhere": the signed-in person's own sessions, never anyone else's. The caller keeps theirs. */
+export async function revokeSessions(actor: Actor): Promise<Result<{ message: string; tokenVersion?: number }>> {
+  if (!isUuid(actor.id)) return gone
+  if (!sessionVersionEnabled()) return invalid('Signing out everywhere is not available yet.')
+  const result = await withUser(actor.id, async (tx) => {
+    const [done] = await tx<{ version: number }[]>`
+      UPDATE app_users SET token_version = token_version + 1
+       WHERE id = ${actor.id} AND is_active
+      RETURNING token_version AS version`
+    if (!done) return gone
+    await writeAudit({ userId: actor.id, action: 'user.sessions_revoke', targetType: 'user', targetId: actor.id, ip: actor.ip }, tx)
+    return { ok: true as const, message: 'Signed out everywhere else.', tokenVersion: done.version }
   })
   if (result.ok) invalidateUserCache(actor.id)
   return result
@@ -63,7 +89,13 @@ export async function resetPassword(ctx: OrgCtx, actor: Actor, userId: string): 
   const hash = await bcrypt.hash(oneTimePassword, BCRYPT_COST)
   const result = await withOrg(ctx, async (tx) => {
     // app_users has no RLS: the membership condition is repeated in the write itself.
-    const done = await tx`
+    const done = sessionVersionEnabled()
+      ? await tx`
+      UPDATE app_users SET hashed_password = ${hash}, token_version = token_version + 1, updated_at = now()
+       WHERE id = ${userId} AND NOT is_platform_admin
+         AND EXISTS (SELECT 1 FROM app_memberships m WHERE m.org_id = ${ctx.org.id} AND m.user_id = ${userId})
+      RETURNING id`
+      : await tx`
       UPDATE app_users SET hashed_password = ${hash}, updated_at = now()
        WHERE id = ${userId} AND NOT is_platform_admin
          AND EXISTS (SELECT 1 FROM app_memberships m WHERE m.org_id = ${ctx.org.id} AND m.user_id = ${userId})

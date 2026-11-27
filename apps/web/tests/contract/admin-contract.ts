@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrgAccess } from '@omnimetrics/types'
 import { LAST_ADMIN, NAME_UNAVAILABLE, OWN_MEMBERSHIP, OWN_RESET, SHARED_LOGIN, WRONG_CURRENT } from '@/lib/admin/password'
 import type { Portal } from '@/lib/portal'
@@ -181,6 +181,21 @@ export function adminContract(label: string, setup: () => Promise<AdminWorld>, t
       expect(JSON.stringify(ok)).not.toContain('first-chosen-password')
       expect(await change(otp, 'second-chosen-password')).toMatchObject({ ok: false, error: WRONG_CURRENT })
       expect(JSON.stringify(await w.audit())).not.toMatch(/chosen-password|\$2[aby]\$/)
+    })
+
+    it('with SESSION_VERSION on: sign out everywhere, change and reset still work', async () => {
+      vi.stubEnv('SESSION_VERSION', '1')
+      try {
+        const m = await add(w.orgAdmin, w.people.orgAdmin)
+        const person = { id: m.member.userId, username: m.member.username }
+        const revoked = await w.portal.account.revokeSessions(person)
+        expect(revoked).toMatchObject({ ok: true })
+        expect(await w.portal.account.changePassword(person, m.oneTimePassword, 'a-brand-new-password')).toMatchObject({ ok: true })
+        expect(await w.portal.accounts.resetPassword(w.orgAdmin, w.people.orgAdmin, person.id)).toMatchObject({ ok: true })
+        expect(JSON.stringify(revoked)).not.toMatch(/\$2[aby]\$|eyJ/)
+      } finally {
+        vi.unstubAllEnvs()
+      }
     })
 
     it('manages organisations for the director only; the slug is checked and never changes', async () => {

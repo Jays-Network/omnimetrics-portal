@@ -41,13 +41,13 @@ const users: Portal['users'] = {
   update: async (c, actor, userId, patch) => usersRepo.update(own(c), actor, userId, patch),
   memberships: todo('users.memberships'),
 }
-// Sessions need a schema change (012): not implemented, fail closed.
+// The session list and revoking ONE session need a sessions table (none exists): not implemented, fail closed.
 const accounts: Portal['accounts'] = {
   sessions: todo('accounts.sessions'),
   revoke: todo('accounts.revoke'),
   resetPassword: async (c, actor, userId) => account_.resetPassword(own(c), actor, userId),
 }
-const account: Portal['account'] = { sessions: todo('account.sessions'), revoke: todo('account.revoke'), changePassword: account_.changePassword }
+const account: Portal['account'] = { sessions: todo('account.sessions'), revoke: todo('account.revoke'), revokeSessions: account_.revokeSessions, changePassword: account_.changePassword }
 // The repository takes the person from the ctx; the actor only supplies the audit ip.
 const settings: Portal['settings'] = {
   get: async (c) => settingsRepo.get(own(c)),

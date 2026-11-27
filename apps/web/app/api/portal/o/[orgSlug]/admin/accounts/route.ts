@@ -1,6 +1,7 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { BAD, badRequest, guardOrg, jsonBody, reply } from '@/lib/portal/route'
+import { BAD, badRequest, guardOrg, jsonBody, reply, tooManyAttempts } from '@/lib/portal/route'
+import { attemptKey, getClientIp, withAttemptLimit } from '@/lib/rate-limit'
 
 // Login security for members of this organisation: sessions, revoke, reset password.
 type Ctx = { params: Promise<{ orgSlug: string }> }
@@ -22,7 +23,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   ]).safeParse(raw)
   if (!b.success) return badRequest()
   const actor = { ...g.actor!, ip: req.headers.get('x-real-ip') }
-  return b.data.op === 'revoke'
-    ? reply(await g.portal!.accounts.revoke(g.access!, actor, b.data.sessionId))
-    : reply(await g.portal!.accounts.resetPassword(g.access!, actor, b.data.userId))
+  if (b.data.op === 'revoke') return reply(await g.portal!.accounts.revoke(g.access!, actor, b.data.sessionId))
+  const { userId } = b.data
+  // Keyed by the person resetting (not the target), so trying one id after another is what gets limited.
+  const tried = await withAttemptLimit(
+    attemptKey('password.reset', actor.id, getClientIp(req)),
+    async () => g.portal!.accounts.resetPassword(g.access!, actor, userId),
+    (r) => (r.ok ? 'success' : 'failure'),
+  )
+  return tried.limited ? tooManyAttempts(tried.retryAfter) : reply(tried.result)
 }

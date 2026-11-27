@@ -5,6 +5,7 @@ import { KeyRound, LogOut } from 'lucide-react'
 import { useFormat } from '@/components/fx/format-context'
 import { GlassPanel } from '@/components/fx/glass-panel'
 import type { MemberRow, SessionRow } from '@/lib/admin/types'
+import { OneTimePassword, type IssuedPassword } from './one-time-password'
 import { DataTable, MockBanner, PageFrame, Pill, Status, api, btnCls, dangerCls, useBusy } from './ui'
 
 /** Login security for members of this organisation. Platform admins are shown but cannot be touched. */
@@ -17,13 +18,19 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
   const [busy, run] = useBusy()
+  const [issued, setIssued] = useState<IssuedPassword | null>(null)
+  const dismissIssued = useCallback(() => setIssued(null), [])
   const loadMembers = useCallback(async () => { const r = await api<{ members: MemberRow[] }>(u, 'GET'); if (r.ok) setMembers(r.data.members); else setMsg({ text: r.error, error: true }) }, [u])
   const loadSessions = useCallback(async (id: string) => { const r = await api<{ sessions: SessionRow[] }>(`${a}?userId=${encodeURIComponent(id)}`, 'GET'); if (r.ok) setSessions(r.data.sessions) }, [a])
   useEffect(() => { void loadMembers() }, [loadMembers])
   useEffect(() => { if (sel) void loadSessions(sel) }, [sel, loadSessions])
   const selMember = members.find((m) => m.userId === sel)
 
-  const reset = (m: MemberRow) => run(async () => { const r = await api<{ message: string }>(a, 'POST', { op: 'reset', userId: m.userId }); setMsg(r.ok ? { text: r.data.message } : { text: r.error, error: true }) })
+  const reset = (m: MemberRow, trigger: HTMLElement) => run(async () => {
+    const r = await api<{ message: string; oneTimePassword: string }>(a, 'POST', { op: 'reset', userId: m.userId })
+    setMsg(r.ok ? { text: r.data.message } : { text: r.error, error: true })
+    if (r.ok) setIssued({ username: m.username, password: r.data.oneTimePassword, trigger })
+  })
   const deactivate = (m: MemberRow) => run(async () => { const r = await api(u, 'POST', { op: 'update', userId: m.userId, active: !m.active }); setMsg(r.ok ? { text: `${m.username} ${m.active ? 'deactivated' : 'activated'} (mock).` } : { text: r.error, error: true }); await loadMembers() })
   const revoke = (s: SessionRow) => run(async () => { const r = await api(a, 'POST', { op: 'revoke', sessionId: s.id }); setMsg(r.ok ? { text: 'Session revoked (mock).' } : { text: r.error, error: true }); if (sel) await loadSessions(sel) })
 
@@ -40,7 +47,7 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
               <td className="px-3 py-2">
                 {m.isPlatform ? <span className="text-xs text-brand-text-muted">Cannot be edited</span> : (
                   <div className="flex flex-wrap gap-1.5">
-                    <button type="button" className={btnCls} disabled={busy} onClick={() => void reset(m)} aria-label={`Reset password for ${m.username}`}><KeyRound className="size-3.5" aria-hidden /> Reset password</button>
+                    <button type="button" className={btnCls} disabled={busy} onClick={(e) => void reset(m, e.currentTarget)} aria-label={`Reset password for ${m.username}`}><KeyRound className="size-3.5" aria-hidden /> Reset password</button>
                     <button type="button" className={btnCls} disabled={busy} onClick={() => void deactivate(m)}>{m.active ? 'Deactivate' : 'Activate'}</button>
                   </div>
                 )}
@@ -64,6 +71,7 @@ export function AccountsView({ orgSlug, orgName }: { orgSlug: string; orgName: s
           </div>
         </GlassPanel>
       </div>
+      {issued ? <OneTimePassword issued={issued} onClose={dismissIssued} /> : null}
     </PageFrame>
   )
 }

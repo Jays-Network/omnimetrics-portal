@@ -1,5 +1,9 @@
 -- smoke_m5.sql.example
--- Behavioural smoke test of migrations 005-010 in the THROWAWAY database portal_test.
+-- Behavioural smoke test of migrations 005-010 and 012 in the THROWAWAY database portal_test.
+-- 012 must be applied (db/test/rebuild_portal_test.sh.example does it), otherwise tests 540-547 FAIL.
+-- 012 tests (540-547, 771): token_version is INTEGER NOT NULL DEFAULT 0; every login is at 0; the app role
+-- can read and UPDATE it but not INSERT it, has no table-wide UPDATE and cannot write is_platform_admin;
+-- the platform role has no SELECT or UPDATE on any app_users column.
 -- Run by Jay, twice, once per role (the file detects which one it is and runs that role's tests):
 --   psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
 --   psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
@@ -233,6 +237,15 @@ BEGIN
           (537, 'app', 'a', 'the env: integration is still listable (SELECT unrestricted)', $q$SELECT count(*)::text FROM app_integrations WHERE id = {a_env} AND has_credentials = false AND credential_source LIKE 'env:DATABASE_URL_READONLY_%'$q$, '1', NULL),
           (538, 'app', 'b', 'org B cannot see or touch org A''s env: row', $q$WITH u AS (UPDATE app_integrations SET name = 'x' WHERE id = {a_env} RETURNING 1) SELECT count(*)::text FROM u$q$, '0', NULL),
           (534, 'app', 'a', 'a stored integration can still be updated', $q$WITH u AS (UPDATE app_integrations SET name = 'plain 2' WHERE id = {a_integ} RETURNING 1) SELECT count(*)::text FROM u$q$, '1', NULL),
+          -- ===== 54x: 012 token_version (541 runs before 546 bumps one) ===========================
+          (540, 'app', 'a', '012: token_version is integer, NOT NULL, default 0', $q$SELECT data_type || ',' || is_nullable || ',' || column_default FROM information_schema.columns WHERE table_name = 'app_users' AND column_name = 'token_version'$q$, 'integer,NO,0', NULL),
+          (541, 'app', 'a', '012: no login has a version other than 0', $q$SELECT count(*)::text FROM app_users WHERE token_version <> 0$q$, '0', NULL),
+          (542, 'app', 'a', '012: app role may UPDATE token_version', $q$SELECT has_column_privilege(current_user, 'app_users', 'token_version', 'UPDATE')::text$q$, 'true', NULL),
+          (543, 'app', 'a', '012: app role may not INSERT token_version', $q$SELECT has_column_privilege(current_user, 'app_users', 'token_version', 'INSERT')::text$q$, 'false', NULL),
+          (544, 'app', 'a', '012: app role has no table-wide UPDATE on app_users', $q$SELECT has_table_privilege(current_user, 'app_users', 'UPDATE')::text$q$, 'false', NULL),
+          (545, 'app', 'a', '012: app role cannot UPDATE is_platform_admin', $q$SELECT has_column_privilege(current_user, 'app_users', 'is_platform_admin', 'UPDATE')::text$q$, 'false', NULL),
+          (546, 'app', 'a', '012: a bump works and returns the new version', $q$WITH u AS (UPDATE app_users SET token_version = token_version + 1 WHERE id = {user_a} RETURNING token_version) SELECT token_version::text FROM u$q$, '1', NULL),
+          (547, 'app', 'a', '012: INSERT naming token_version refused', $q$INSERT INTO app_users (username, email, hashed_password, token_version) VALUES ('smoke_tv', 'tv@example.test', 'h', 5)$q$, 'ERR:permission denied', NULL),
           -- ===== 6xx: settings ====================================================================
           (600, 'app', 'a', 'system scope write refused (an org admin is just portal_app + org context)', $q$INSERT INTO app_settings (scope, key, value) VALUES ('system', 'language', '"en"')$q$, 'ERR:row-level security', NULL),
           (601, 'app', 'a', 'another user''s scope write refused', $q$INSERT INTO app_settings (scope, user_id, key, value) VALUES ('user', {user_b}, 'language', '"en"')$q$, 'ERR:row-level security', NULL),
@@ -246,6 +259,7 @@ BEGIN
           (712, 'platform', 'none', 'org DELETE denied',   $q$DELETE FROM app_orgs WHERE slug = 'smoke-c'$q$, 'ERR:permission denied', NULL),
           (720, 'platform', 'none', 'no access to app_users', $q$SELECT count(*) FROM app_users$q$, 'ERR:permission denied', NULL),
           (721, 'platform', 'none', 'no access to {T}',      $q$SELECT count(*) FROM {T}$q$, 'ERR:permission denied', 'denied'),
+          (771, 'platform', 'none', '012: platform role has no SELECT or UPDATE on app_users columns', $q$SELECT has_any_column_privilege(current_user, 'app_users', 'SELECT,UPDATE')::text$q$, 'false', NULL),
           (730, 'platform', 'none', 'memberships readable without org context', $q$SELECT (count(*) >= 0)::text FROM app_memberships$q$, 'true', NULL),
           (731, 'platform', 'none', 'membership INSERT passes RLS (fails later on the user FK)', $q$INSERT INTO app_memberships (org_id, user_id, role) SELECT id, gen_random_uuid(), 'viewer' FROM app_orgs LIMIT 1$q$, 'ERR:foreign key', NULL),
           (732, 'platform', 'none', 'membership UPDATE allowed', $q$UPDATE app_memberships SET is_active = false$q$, 'OK', NULL),

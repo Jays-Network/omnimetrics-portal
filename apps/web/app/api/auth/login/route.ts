@@ -14,6 +14,7 @@ import {
   recordFailure,
   retryAfterSeconds,
 } from '@/lib/rate-limit'
+import { sessionVersionEnabled } from '@/lib/session-version'
 
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(100),
@@ -27,6 +28,7 @@ interface UserRow {
   hashed_password: string
   role: string
   is_active: boolean
+  token_version?: number
 }
 
 // Compared against when the username does not exist, so response time does not
@@ -65,7 +67,14 @@ export async function POST(request: NextRequest) {
   }
 
   const sql = getDb()
-  const rows = await sql<UserRow[]>`
+  // With the flag on, the version is read in the SAME statement as the hash it belongs to.
+  const rows = sessionVersionEnabled()
+    ? await sql<UserRow[]>`
+    SELECT id, username, email, hashed_password, role, is_active, token_version
+    FROM app_users
+    WHERE username = ${username}
+  `
+    : await sql<UserRow[]>`
     SELECT id, username, email, hashed_password, role, is_active
     FROM app_users
     WHERE username = ${username}
@@ -90,7 +99,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Identity only: role and allowed_projects are derived from the DB by requireAuth().
-  const token = await signToken({ sub: row.id })
+  const token = await signToken({ sub: row.id, tv: row.token_version })
 
   clearFailures(limiterKey)
   await writeAudit({ userId: row.id, action: 'login_success', targetType: 'user', targetId: row.id, detail: { username: row.username }, ip: request.headers.get('x-real-ip') })

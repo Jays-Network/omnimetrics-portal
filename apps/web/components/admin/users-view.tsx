@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Network, UserPlus } from 'lucide-react'
 import type { Role } from '@omnimetrics/types'
 import type { MemberRow, Membership } from '@/lib/admin/types'
 import { GlassPanel } from '@/components/fx/glass-panel'
+import { OneTimePassword, type IssuedPassword } from './one-time-password'
 import { DataTable, Drawer, Field, MockBanner, PageFrame, Pill, Status, api, btnCls, inputCls, primaryCls, useBusy } from './ui'
 
 const ROLES: Role[] = ['admin', 'builder', 'viewer']
@@ -17,6 +18,9 @@ export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; o
   const [scope, setScope] = useState<MemberRow | null>(null)
   const [picked, setPicked] = useState<string[]>([])
   const [adding, setAdding] = useState(false)
+  const [issued, setIssued] = useState<IssuedPassword | null>(null)
+  const addButton = useRef<HTMLButtonElement>(null)
+  const dismissIssued = useCallback(() => setIssued(null), [])
   const [across, setAcross] = useState<{ username: string; memberships: Membership[] } | null>(null)
   const [busy, run] = useBusy()
   const load = useCallback(async () => {
@@ -37,7 +41,7 @@ export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; o
 
   return (
     <PageFrame title="Users" description={`${orgName}: people, their role here, grants and tracking scope. A shared login shows only what it holds in this organisation.`} actions={
-      <button type="button" className={primaryCls} onClick={() => setAdding(true)}><UserPlus className="size-4" aria-hidden /> Add user</button>
+      <button ref={addButton} type="button" className={primaryCls} onClick={() => setAdding(true)}><UserPlus className="size-4" aria-hidden /> Add user</button>
     }>
       <MockBanner>Mock: nothing is stored or sent.</MockBanner>
       <Status msg={msg} />
@@ -90,7 +94,8 @@ export function UsersView({ orgSlug, orgName, isDirector }: { orgSlug: string; o
           </fieldset>
         </Drawer>
       ) : null}
-      {adding ? <AddUser orgName={orgName} onClose={() => setAdding(false)} onAdd={async (b) => { const r = await api(base, 'POST', { op: 'add', ...b }); if (r.ok) { setAdding(false); setMsg({ text: `Added ${b.username} (mock).` }); await load(); return null } return r.error }} /> : null}
+      {adding ? <AddUser orgName={orgName} onClose={() => setAdding(false)} onAdd={async (b) => { const r = await api<{ oneTimePassword: string }>(base, 'POST', { op: 'add', ...b }); if (r.ok) { setAdding(false); setIssued({ username: b.username, password: r.data.oneTimePassword, trigger: addButton.current }); setMsg({ text: `Added ${b.username} (mock).` }); await load(); return null } return r.error }} /> : null}
+      {issued ? <OneTimePassword issued={issued} onClose={dismissIssued} /> : null}
     </PageFrame>
   )
 }

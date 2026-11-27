@@ -1,4 +1,15 @@
-# M5 Apply Checklist (migrations 003b and 004 to 010)
+# M5 Apply Checklist (migrations 003b and 004 to 012)
+
+## Cut-over order (do not reorder)
+
+1. **Fresh vzdump** (pre-flight 1).
+2. **003b**, then **004**.
+3. **005, 006, 007, 008**.
+4. **009, ONCE**, before any login is created by the portal.
+5. **010** (with the M5 app release, section 3), then **011**, then **012**.
+6. Only then set **`SESSION_VERSION=1`** (section 9) and restart the portal.
+
+**Never re-run 009 after the portal has created logins.** Its backfill gives every `app_users` row a WorldRisk membership, including people who were added to another organisation only.
 
 Applied BY JAY, by hand. Claude writes the SQL and never runs it against `jaysnet_data`.
 Files live in `db/migrations/` as `NNN_name.sql.example` with a matching `NNN_name.down.sql.example`.
@@ -15,8 +26,9 @@ Each is one transaction. Run with `-v ON_ERROR_STOP=1` (do NOT use `-1`; the fil
 | 009 `audit_backfill` | `jaysnet_admin` | audit columns, WorldRisk backfill |
 | 010 `rls_grants` | `jaysnet_admin` | RLS + grants to `portal_app` and `portal_platform`, credential function (apply WITH the M5 app release) |
 | 011 `seed_managed_sources` | `postgres` (bypasses RLS; the file refuses anyone else) | global host `localhost:5432` + one managed `env:` integration per org (no credential) |
+| 012 `session_version` | `jaysnet_admin` | `app_users.token_version` + column UPDATE grant for `portal_app` (ending sessions; used only with `SESSION_VERSION=1`) |
 
-Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010 → 011. Rollback is the exact reverse: 011 → 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
+Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012. Rollback is the exact reverse: 012 → 011 → 010 → 009 → 008 → 007 → 006 → 005 → 004 → 003b.
 **Passwords are never in a file.** 003b and 004 create the roles with LOGIN and no password; Jay sets each one by hand with `\password` (section 1). A role without a password cannot log in (scram/md5).
 005 to 009 are safe for the CURRENT app (additive; legacy `app_users.role` and the old reads still work). 010 changes behaviour for it (see "010 cut-over").
 
@@ -44,7 +56,7 @@ Order: 003b and 004 can go any time after the pre-flight (003b BEFORE 010). 005 
 7. **Time-zone decision for 004** (R6 relevant): run the two queries in the 004 header (Grafana's effective timezone; stored zone of `row_modified_at`). Edit the two `ALTER ROLE ... SET timezone` lines if the answer is not `Africa/Johannesburg`. Record the outcome in `docs/DECISIONS.md` if any number can change.
 8. **Passwords** for the three new roles (`portal_reader_wr`, `portal_reader_adars`, `portal_platform`) generated with `openssl rand -base64 32` and kept in your password manager. They go only into `\password` (section 1) and then into `.env` (`DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `DATABASE_URL_PLATFORM`). Nothing is typed into a file or onto a command line. The real `003_*.sql` / `004_*.sql` copies stay git-ignored (`.gitignore` lines kept).
 9. **Env list for the M5 release** (`.env`, outside git): `DATABASE_URL` (portal_app), `DATABASE_URL_PLATFORM` (portal_platform, used ONLY by `withPlatform()`; never given to any other code path), `DATABASE_URL_READONLY_WR`, `DATABASE_URL_READONLY_ADARS`, `INTEGRATION_KEYS`. The only `env:` credential sources the schema accepts are `env:DATABASE_URL_READONLY_<NAME>`.
-10. **Test database green first**: `db/test/setup_test_db.sql.example` applied, 001 and 005 to 010 applied there, 011 applied there as `postgres` (so the env: row tests run), and `db/test/smoke_m5.sql.example` run once as `portal_test_app` and once as `portal_test_platform` with `0 FAILED, 0 skipped` (section 6). Do not start section 1 before this.
+10. **Test database green first**: `db/test/setup_test_db.sql.example` applied, 001 and 005 to 012 applied there (`sudo bash db/test/rebuild_portal_test.sh.example` does all of it, section 8), and `db/test/smoke_m5.sql.example` run once as `portal_test_app` and once as `portal_test_platform` with `0 FAILED, 0 skipped` (section 6). Do not start section 1 before this.
 11. **Row snapshot** (baseline for later comparison):
    ```sql
    SELECT (SELECT count(*) FROM app_users) users, (SELECT count(*) FROM app_user_projects) projects, (SELECT count(*) FROM app_audit_log) audits,
@@ -69,6 +81,8 @@ done
 psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.sql.example
 # 011 (postgres, bypasses RLS; no secret in the file). After 010, once the M5 release is deployed or just before it:
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.sql.example
+# 012 (jaysnet_admin), after 010. Then the checks in section 2, and only then SESSION_VERSION=1 (section 9):
+psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.sql.example
 ```
 **Set the three passwords by hand, right after 003b and 004** (as postgres, interactive; the password is not echoed, not logged, not in shell history):
 ```bash
@@ -146,7 +160,7 @@ SELECT count(*) FROM app_user_projects WHERE org_id = (SELECT id FROM app_orgs W
 SELECT u.username, u.role, m.role, m.is_active FROM app_users u JOIN app_memberships m ON m.user_id=u.id ORDER BY 1;  -- roles equal
 SELECT count(*) FROM app_audit_log WHERE org_id IS NOT NULL;                                -- 0 (historic rows stay platform-level)
 ```
-Re-run 009: every NOTICE must read `inserted 0` / `moved to worldrisk: 0`; the counts above do not change.
+Run 009 **once**. Do not re-run it as a check, and never after the portal has created logins (see "Cut-over order").
 
 **After 010.**
 ```sql
@@ -216,6 +230,8 @@ SELECT count(*) FROM app_users;                               -- ERROR permissio
 ```
 Then run the behavioural smoke test again against the real roles' semantics in portal_test (section 6) if 010 or the policies were edited since it last passed.
 
+**After 012.** Run the checks in its header (column `integer, NO, 0`; no row with a version other than 0; `portal_app` may UPDATE `token_version` but not INSERT it, has no table-wide UPDATE and cannot write `is_platform_admin`; `portal_platform` has nothing on `app_users`). The header's line "NO APP CODE USES IT YET" predates stage 2c: the app uses the column when `SESSION_VERSION=1`.
+
 ## 3. 010 cut-over (do not skip)
 
 - Deploy the M5 app release (`PORTAL_DATA=pg`, `withOrg`/`withUser`/`withPlatform`, `requireOrg`, per-org loadUser) in the same window as 010. Between 010 and that release the old app sees no project rows for builders/viewers and no audit rows (fails closed).
@@ -225,15 +241,17 @@ Then run the behavioural smoke test again against the real roles' semantics in p
 - Existing sessions: roles come from memberships after the cut-over; check that no user gained access (compare the pre-010 `allowed_projects` per user with the new one).
 - Do not enter any real integration credential until the isolation matrix is green; do not create client logins before TOTP (R7 hardening).
 
-- **Do not re-run 009 after the portal has created logins:** its backfill gives every `app_users` row a WorldRisk membership, including people added to another organisation only.
-- **The one-time password is not shown by any screen yet** (add user, reset). The API returns it once; the UI must display it before org admins use these screens.
-- Pg functions in this release (stage 2b): `organisations.list/create/update`; `users.list/add/link/update`; `account.changePassword/resetPassword`; `settings.get/set`; `writeAudit`. Still fail closed: `users.memberships`, `accounts.sessions/revoke`, `account.sessions/revoke`, `integrations.*`, tracking-scope editing.
-- `012_session_version` is written and **NOT applied** (review first; no app code uses it). Until then a password change or reset does NOT end existing sessions (a token stays valid until it expires). When approved: run as `jaysnet_admin`, after 010 (header has the commands and checks); roll back before 010.
+- **Never re-run 009 after the portal has created logins:** its backfill gives every `app_users` row a WorldRisk membership, including people added to another organisation only.
+- The one-time password (add user, reset) is shown once in a panel on the Users and Accounts screens (stage 2c).
+- Pg functions in this release (stage 2b): `organisations.list/create/update`; `users.list/add/link/update`; `account.changePassword/resetPassword`; `settings.get/set`; `writeAudit`. Stage 2c adds `account.revokeSessions` (needs `SESSION_VERSION=1`). Still fail closed: `users.memberships`, `accounts.sessions/revoke`, `account.sessions/revoke` (the session list and revoking one session have no schema), `integrations.*`, tracking-scope editing.
+- Until 012 is applied AND `SESSION_VERSION=1`, a password change or reset does NOT end existing sessions (a token stays valid until it expires). 012: run as `jaysnet_admin`, after 010; roll back before 010.
 
 ## 4. Roll back (reverse order, each as its listed role; copy each `.down.sql.example` and run)
 
+**012 first, and only after `SESSION_VERSION` is unset and the portal restarted** (with the flag on and no column, every signed-in request answers 503):
 ```bash
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.down.sql.example   # first; deletes the 2 managed integrations (+ datasets on them) and the global localhost host
+psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/012_session_version.down.sql.example
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d jaysnet_data -f db/migrations/011_seed_managed_sources.down.sql.example   # next; deletes the 2 managed integrations (+ datasets on them) and the global localhost host
 psql -v ON_ERROR_STOP=1 -v app_role=portal_app -v platform_role=portal_platform -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/010_rls_grants.down.sql.example
 for f in 009_audit_backfill 008_settings 007_integrations_datasets 006_content 005_orgs_memberships; do
   psql -v ON_ERROR_STOP=1 -U jaysnet_admin -d jaysnet_data -h localhost -f db/migrations/$f.down.sql.example || break
@@ -262,17 +280,18 @@ Re-run 011: both NOTICEs read `inserted 0`. As `portal_app` (psql, inside a tran
 - Remove the throwaway pieces when done if wanted: `sudo -u postgres psql -d postgres -v teardown=1 -f db/test/setup_test_db.sql` (drops `portal_test` and the three test roles only).
 - Not in 005 to 010 (separate later files): `app_totp_secrets`, dropping legacy `app_users.role`, and the first two named datasets.
 
-## 6. Smoke test in the throwaway database (BEFORE section 1, and again after any edit to 006/007/010)
+## 6. Smoke test in the throwaway database (BEFORE section 1, and again after any edit to 006/007/010/012)
 
 `portal_test` only; never `jaysnet_data`. The file refuses to run elsewhere, runs inside one transaction and always ends with `ROLLBACK`.
 ```bash
-# one-time: setup_test_db.sql.example + 001, 005-009 + 010 with both -v roles (commands in the header of setup_test_db.sql.example)
-psql -q -v ON_ERROR_STOP=1 -U portal_test_app      -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
-psql -q -v ON_ERROR_STOP=1 -U portal_test_platform -h localhost -d portal_test -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
+# first: sudo bash db/test/rebuild_portal_test.sh.example   (001, 005-012, fresh passwords). Then, from the repository root:
+for who in APP PLATFORM; do
+  psql -q -v ON_ERROR_STOP=1 "$(grep "^TEST_DATABASE_URL_$who=" apps/web/.env.test | cut -d= -f2-)" -f db/test/smoke_m5.sql.example 2>&1 | grep -E 'FAIL|SKIP|passed'
+done
 ```
-Apply 011 to `portal_test` first (`sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -f db/migrations/011_seed_managed_sources.sql.example`): it is the only way to create an `env:` row, and tests 535 to 538 (UPDATE and DELETE of an env: row touch 0 rows; other org cannot touch it) use it. Without it they print `SKIP`.
+011 (applied by the rebuild script) is the only way to create an `env:` row, and tests 535 to 538 (UPDATE and DELETE of an env: row touch 0 rows; other org cannot touch it) use it. Without it they print `SKIP`.
 New in this version, all as `portal_test_app`: 250 to 252 (INSERT, UPDATE, DELETE on `app_allowed_hosts` refused by privilege), 535 to 538 (env: row), 131 (no org-owned host rows without context; the global `localhost` row is readable by design); 412 now uses `RETURNING id` (a constant RETURNING does not trigger the SELECT policy).
-Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skipped` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED, 0 skipped`; no line starting `FAIL` or `SKIP`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to `jaysnet_data`, send the output back.
+Tests 540 to 547 and 771 are the 012 checks (column, default, grants, a bump). Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skipped` and `smoke_m5 (portal_test_platform): N passed, 0 FAILED, 0 skipped`; no line starting `FAIL` or `SKIP`. Any FAIL line names the test number, what was expected and what happened: stop, do not apply to `jaysnet_data`, send the output back.
 
 ## 7. Open points (decide before the M5 release)
 
@@ -282,16 +301,16 @@ Expected: one line each, `smoke_m5 (portal_test_app): N passed, 0 FAILED, 0 skip
 ## 8. Application tests against the throwaway database (`pnpm test:db`, stage 2a)
 
 `portal_test` only. The harness refuses to run unless `current_database()` is `portal_test` and the users are `portal_test_app` / `portal_test_platform`.
-Needs `apps/web/.env.test` (git-ignored) with `TEST_DATABASE_URL_APP` and `TEST_DATABASE_URL_PLATFORM`.
+Needs `apps/web/.env.test` (git-ignored) with `TEST_DATABASE_URL_APP` and `TEST_DATABASE_URL_PLATFORM`; the rebuild script writes both.
 
 ```bash
 cd /opt/omnimetrics-portal
-sudo bash db/test/rebuild_portal_test.sh.example          # drops and recreates portal_test (001, 005-010, 011)
-sudo -u postgres psql -d portal_test                      # then: \password portal_test_app   \password portal_test_platform
-pnpm test:db                                              # pg repositories: contract, isolation matrix, grants, context
-pnpm test                                                 # unit tests (no database)
+sudo bash db/test/rebuild_portal_test.sh.example   # drops and recreates portal_test (001, 005-012), new passwords into .env.test
+                                                   # must end with "ready for pnpm test:db"
+pnpm test:db                                       # pg repositories: contract, isolation matrix, grants, context, session version
+pnpm test                                          # unit tests (no database)
 ```
-The passwords must match `.env.test`, and must be set again after every rebuild.
+Every rebuild sets new random passwords for `portal_test_app` and `portal_test_platform` (nothing to type). `portal_test_owner` gets none.
 
 The tests need two committed fixtures, both created by the rebuild script: the platform administrator `itest_director` (only postgres can set the flag) and, since stage 2b, `itest_linkable`, a login with no membership. To add the second to an existing `portal_test` without rebuilding (no password reset needed):
 ```bash
@@ -302,3 +321,12 @@ And the first:
 sudo -u postgres psql -v ON_ERROR_STOP=1 -d portal_test -c "INSERT INTO app_users (username,email,hashed_password,role,is_platform_admin) VALUES ('itest_director','itest_director@example.test','!','viewer',true) ON CONFLICT (username) DO UPDATE SET is_platform_admin=true, is_active=true"
 ```
 Test data is rolled back (neither test role could delete it). The one committed write is the suspended/archived test, which changes the `adars` status and restores it; after an interrupted run, rebuild. The smoke test (section 6) still works afterwards.
+
+## 9. Session version (`SESSION_VERSION`)
+
+- Default **off**. Only the exact value `1` turns it on (`true` does not). It goes in the portal's env file outside git; restart the portal afterwards.
+- Set it **only after 012** is applied. With it on and no column, every signed-in request answers 503 and login fails.
+- Turning it on signs nobody out: tokens without `tv` count as version 0, which is every login's version after 012.
+- On: a password change, reset or "sign out everywhere" (`POST /api/portal/account` `{"op":"revoke_all"}`) ends that person's other sessions. Change and revoke keep the current session (same expiry).
+- It takes effect through the pg data layer (`PORTAL_DATA=pg`). With the mock portal nothing bumps the version.
+- Turning it off again makes ended tokens valid until they expire. To end every session then, change `JWT_SECRET`.

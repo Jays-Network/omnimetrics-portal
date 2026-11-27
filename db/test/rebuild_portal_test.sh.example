@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # rebuild_portal_test.sh.example
-# Tears down and recreates the THROWAWAY database portal_test with migrations 001, 005-010 and 011
-# (docs/M5_APPLY_CHECKLIST.md sections 6 and 8). Never touches jaysnet_data or the real roles.
+# Tears down and recreates the THROWAWAY database portal_test with migrations 001 and 005-012 and leaves it
+# READY for pnpm test:db (docs/M5_APPLY_CHECKLIST.md sections 6 and 8). Never touches jaysnet_data or the
+# real roles.
 #
 # RUN AS root, from anywhere:
 #   sudo bash db/test/rebuild_portal_test.sh.example
 #
-# It DROPS portal_test and the three portal_test_* roles first, so their passwords are lost.
-# No password is in this file. Afterwards set them by hand (see the reminder it prints).
+# It DROPS portal_test and the three portal_test_* roles first. portal_test_app and portal_test_platform
+# get a NEW random password on every run, which goes only into the database and into apps/web/.env.test
+# (TEST_DATABASE_URL_APP, TEST_DATABASE_URL_PLATFORM; other lines are kept; mode 600, owned by the owner
+# of the repository). No password is printed, passed as an argument or kept in this file.
+# portal_test_owner gets no password (nothing here needs one).
 #
 # The schema files run as postgres with `role=portal_test_owner` (the same ownership as connecting as the
-# owner, which has no password yet at this point). 011 and the test administrator need postgres itself.
+# owner). 011 and the test administrator need postgres itself.
 
 set -euo pipefail
+set +x # even under `bash -x`: nothing here may be traced, it handles passwords
 
 DB="${1:-portal_test}"
 if [[ "$DB" != "portal_test" ]]; then
@@ -24,11 +29,17 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 # Nothing from the caller's environment may redirect psql to another server or database.
-unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGSERVICE PGOPTIONS
+unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGSERVICE PGOPTIONS PGPASSWORD PGPASSFILE
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 SETUP=db/test/setup_test_db.sql.example
+ENV_FILE="$REPO/apps/web/.env.test"
+ENV_OWNER="$(stat -c %U "$REPO")"
+if [[ -L "$ENV_FILE" ]]; then
+  echo "REFUSING: $ENV_FILE is a symbolic link." >&2
+  exit 1
+fi
 
 as_postgres() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }
 as_owner() { runuser -u postgres -- env PGOPTIONS='-c role=portal_test_owner' psql -X -q -v ON_ERROR_STOP=1 -d "$DB" "$@"; }
@@ -52,6 +63,8 @@ for f in 001_app_tables.sql \
 done
 echo "== 010 (RLS and grants for the test roles)"
 as_owner -v app_role=portal_test_app -v platform_role=portal_test_platform -f db/migrations/010_rls_grants.sql.example
+echo "== 012 (token_version; after 010, as portal_test_owner)"
+as_owner -v app_role=portal_test_app -v platform_role=portal_test_platform -f db/migrations/012_session_version.sql.example
 echo "== 011 (as postgres)"
 as_postgres -d "$DB" -f db/migrations/011_seed_managed_sources.sql.example
 
@@ -65,13 +78,58 @@ as_postgres -d "$DB" -c "INSERT INTO app_users (username, email, hashed_password
   VALUES ('itest_linkable', 'itest_linkable@example.test', '!', 'viewer')
   ON CONFLICT (username) DO UPDATE SET is_active = true, is_platform_admin = false"
 
-cat <<'REMINDER'
+echo "== new passwords for portal_test_app and portal_test_platform (not shown)"
+new_password() { od -An -N24 -tx1 /dev/urandom | tr -d ' \n'; }
+APP_PW="$(new_password)"
+PLATFORM_PW="$(new_password)"
+if [[ ${#APP_PW} -ne 48 || ${#PLATFORM_PW} -ne 48 ]]; then
+  echo "Could not generate passwords." >&2
+  exit 1
+fi
 
-portal_test rebuilt. NOW set the passwords again (the roles were recreated without one):
-  sudo -u postgres psql -d portal_test
-    \password portal_test_app
-    \password portal_test_platform
-    \password portal_test_owner      (only if you connect as the owner)
-pnpm test:db needs the two test-role passwords after EVERY rebuild: use the ones in
-apps/web/.env.test (TEST_DATABASE_URL_APP, TEST_DATABASE_URL_PLATFORM) or update that file.
-REMINDER
+# Sent over stdin (printf is a shell builtin), so a password is never in a process list. The SETs keep the
+# statements out of the server log, also if one fails.
+if ! {
+  printf "SET log_statement = 'none';\nSET log_min_duration_statement = -1;\nSET log_min_error_statement = 'panic';\n"
+  printf "ALTER ROLE portal_test_app PASSWORD '%s';\n" "$APP_PW"
+  printf "ALTER ROLE portal_test_platform PASSWORD '%s';\n" "$PLATFORM_PW"
+} | as_postgres -d postgres >/dev/null 2>&1; then
+  echo "FAILED to set the test role passwords." >&2
+  exit 1
+fi
+
+echo "== apps/web/.env.test (written as $ENV_OWNER, mode 600)"
+# Written as the repository owner, never as root: ownership is right and root follows no path of theirs.
+# The two old lines are dropped, every other line is kept, the new ones are appended.
+printf '%s\n%s\n' "$APP_PW" "$PLATFORM_PW" | runuser -u "$ENV_OWNER" -- bash -c '
+  set -euo pipefail
+  umask 077
+  file="$1"
+  IFS= read -r app
+  IFS= read -r platform
+  tmp="$(mktemp "$file.XXXXXX")"
+  trap "rm -f -- \"\$tmp\"" EXIT
+  if [[ -f "$file" ]]; then
+    awk "!/^[[:space:]]*(export[[:space:]]+)?TEST_DATABASE_URL_(APP|PLATFORM)[[:space:]]*=/" "$file" > "$tmp"
+  fi
+  printf "TEST_DATABASE_URL_APP=postgresql://portal_test_app:%s@localhost:5432/portal_test\n" "$app" >> "$tmp"
+  printf "TEST_DATABASE_URL_PLATFORM=postgresql://portal_test_platform:%s@localhost:5432/portal_test\n" "$platform" >> "$tmp"
+  chmod 600 "$tmp"
+  mv -f -- "$tmp" "$file"
+' _ "$ENV_FILE"
+
+echo "== verify both logins"
+login_ok() { # role password
+  local who
+  who="$(PGPASSWORD="$2" psql -X -w -q -h localhost -p 5432 -U "$1" -d portal_test -tAc 'SELECT current_user')" || return 1
+  [[ "$who" == "$1" ]]
+}
+failed=0
+login_ok portal_test_app "$APP_PW" || { echo "LOGIN FAILED: portal_test_app" >&2; failed=1; }
+login_ok portal_test_platform "$PLATFORM_PW" || { echo "LOGIN FAILED: portal_test_platform" >&2; failed=1; }
+unset APP_PW PLATFORM_PW
+if [[ $failed -ne 0 ]]; then
+  echo "portal_test was rebuilt but is NOT ready (check pg_hba.conf for the portal_test_* roles)." >&2
+  exit 1
+fi
+echo "ready for pnpm test:db"

@@ -98,3 +98,15 @@ Made while building; Jay to confirm or overrule before the cut-over.
 - **S9.** `loadUser` no longer reads `app_user_projects`: non-admins get `allowed_projects = []`, the legacy admin keeps `null`. Nothing renders tracking data from it yet.
 - **S10.** Until 009 is applied, login events are still written in the 001 shape (address inside `detail`), so no audit is lost.
 - **S11.** The audit address comes from `X-Real-IP` only. The login rate limiter is unchanged (it still falls back to `X-Forwarded-For`).
+
+## M5 stage 2c decisions (2026-11-27; accounts and sessions only, no tracking number changes)
+Made while building; Jay to confirm or overrule before the cut-over.
+- **C1.** `SESSION_VERSION` is on only when it is exactly `1`.
+- **C2.** A session re-issued after a password change or "sign out everywhere" keeps its original expiry: neither action extends a session.
+- **C3.** "Sign out everywhere" is `account.revokeSessions` (`op: "revoke_all"`). With the flag off it is refused with a message, not an error. Revoking ONE session (`account.revoke`) and the session list stay not implemented in pg (no schema). No button for it was added to My account.
+- **C4.** Password attempt limits are keyed by the signed-in person doing the attempt (not the reset target) plus client IP, 5 failures in 15 minutes. Change: only a wrong current password counts. Reset: every refusal counts (not found, forbidden, own login).
+- **C5.** The client IP for those limits comes from the same function as login (`X-Real-IP`, else `X-Forwarded-For`).
+- **C6.** With the flag on, a user load that was already in flight when the user cache was invalidated is not cached, so a bump cannot be undone by an older read.
+- **C7.** The one-time password panel closes on Done or Escape, not on a click outside; leaving the page drops it. Where the clipboard API is missing (plain http) Copy selects the field and tries the older copy command, and says so if that fails.
+- **C8.** The test database rebuild sets new random passwords every run and writes them to `apps/web/.env.test`; `portal_test_owner` gets none.
+- **C9.** The checklist no longer asks to re-run 009 as an idempotency check: it is run once.

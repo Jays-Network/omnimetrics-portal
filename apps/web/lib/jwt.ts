@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import type { JWTPayload } from '@omnimetrics/types'
+import { sessionVersionEnabled } from './session-version'
 
 /**
  * Edge-safe JWT helpers (jose only: no database, no next/headers), so
@@ -21,15 +22,16 @@ export function getTokenLifetimeSeconds(): number {
   return (Number.isFinite(hours) && hours > 0 ? hours : 24) * 3600
 }
 
-/** Identity only. Never put role, is_active or allowed_projects in the token. */
-export type TokenClaims = Pick<JWTPayload, 'sub'>
+/** Identity only (plus the session version). Never put role, is_active or allowed_projects in the token. */
+export type TokenClaims = Pick<JWTPayload, 'sub' | 'tv'>
 
-export async function signToken(claims: TokenClaims): Promise<string> {
-  return new SignJWT({})
+/** `expiresAt` (epoch seconds) keeps the original expiry when a session is re-issued. */
+export async function signToken(claims: TokenClaims, expiresAt?: number): Promise<string> {
+  return new SignJWT(sessionVersionEnabled() ? { tv: claims.tv ?? 0 } : {})
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.sub)
     .setIssuedAt()
-    .setExpirationTime(`${getTokenLifetimeSeconds()}s`)
+    .setExpirationTime(expiresAt ?? `${getTokenLifetimeSeconds()}s`)
     .sign(getJwtSecret())
 }
 
@@ -40,7 +42,10 @@ export async function verifyToken(token: string | undefined | null): Promise<JWT
     const { payload } = await jwtVerify(token, getJwtSecret(), { algorithms: ['HS256'] })
     const { sub, exp, iat } = payload
     if (typeof sub !== 'string' || sub.length === 0 || typeof exp !== 'number') return null
-    return { sub, exp, iat: typeof iat === 'number' ? iat : undefined }
+    const claims: JWTPayload = { sub, exp, iat: typeof iat === 'number' ? iat : undefined }
+    if (!sessionVersionEnabled()) return claims
+    const tv = payload.tv ?? 0 // a token signed before the flag was on
+    return typeof tv === 'number' && Number.isInteger(tv) && tv >= 0 ? { ...claims, tv } : null
   } catch {
     return null
   }

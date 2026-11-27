@@ -91,3 +91,12 @@ Rulings recorded: R7 (SQL terminal is director-only; CLAUDE.md hard rule updated
   - Code: `lib/portal/pg/{organisations,users,account,settings}.ts`, `lib/audit.ts` (`writeAudit`), `lib/admin/password.ts`, `loadUser` reads `app_users` only, routes now `await` and pass `X-Real-IP`, new `op: "link"` (director) on the users route. Mock follows the same rules. `012_session_version` written, NOT applied, no app code.
   - Tests: typecheck clean, `pnpm test` 305 green. `pnpm test:db` 63 of 66 green; the 3 linking tests wait for a rebuild (`itest_linkable`, M5_APPLY_CHECKLIST section 8). `pnpm build` not run (dev server).
   - Open before cut-over: the Users/Accounts screens do not yet SHOW the one-time password (and still say "mock"); no sessions list/revoke (012); director's cross-organisation memberships view and tracking-scope editing not built in pg; DECISIONS S1 to S11 await Jay.
+
+
+- **M5 stage 2c (2026-11-27): stage 2b gaps closed. Not committed.** `PORTAL_DATA` stays `mock`; production still refuses mock and pg.
+  - One-time password panel (`components/admin/one-time-password.tsx`) after add user and reset password.
+  - Attempt limits on password change and reset (`withAttemptLimit` in `lib/rate-limit.ts`).
+  - Session version behind `SESSION_VERSION` (default off; `lib/session-version.ts`, jwt, auth, login, `pg/account.ts` incl. `revokeSessions`). 012 is NOT applied to `jaysnet_data`.
+  - `db/test/rebuild_portal_test.sh.example` now applies 012, sets passwords, writes `.env.test`, verifies logins. 012 checks added to the smoke test. **Neither was run by Claude.**
+  - Tests: typecheck clean, `pnpm test` 331 green (was 305). `pnpm test:db` needs the rebuild first (012). `pnpm build` not run.
+  - Open: Jay runs the rebuild, `pnpm test:db` and the smoke test; DECISIONS C1 to C9; no "sign out everywhere" button; the account, Users and Accounts screens still say "mock".

@@ -1,6 +1,6 @@
 /**
- * In-memory login rate limiter: max 5 failed attempts per 15 minutes per
- * IP + username. Per-process state (resets on restart) which is acceptable
+ * In-memory rate limiter for login and password operations: max 5 failed attempts
+ * per 15 minutes per key (login: IP + username; passwords: user id + IP). Per-process state (resets on restart) which is acceptable
  * for a single-process deployment.
  */
 
@@ -46,6 +46,32 @@ export function recordFailure(key: string, now = Date.now()): number {
 
 export function clearFailures(key: string): void {
   failures.delete(key)
+}
+
+export const TOO_MANY_ATTEMPTS = 'Too many failed attempts. Try again later.'
+
+/** The newline cannot arrive in a header, so these keys never collide with a login key. */
+export function attemptKey(kind: 'password.change' | 'password.reset', userId: string, ip: string): string {
+  return `${kind}\n${userId}\n${ip}`
+}
+
+/**
+ * Runs `attempt` unless the key is locked out. 'failure' counts, 'success' clears, 'neutral' (e.g. a new
+ * password that is too short) does neither. A thrown error counts nothing.
+ */
+export async function withAttemptLimit<T>(
+  key: string,
+  attempt: () => Promise<T>,
+  judge: (result: T) => 'success' | 'failure' | 'neutral',
+  now: () => number = Date.now,
+): Promise<{ limited: true; retryAfter: number } | { limited: false; result: T }> {
+  const retryAfter = retryAfterSeconds(key, now())
+  if (retryAfter > 0) return { limited: true, retryAfter }
+  const result = await attempt()
+  const verdict = judge(result)
+  if (verdict === 'failure') recordFailure(key, now())
+  else if (verdict === 'success') clearFailures(key)
+  return { limited: false, result }
 }
 
 /**
